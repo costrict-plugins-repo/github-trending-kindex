@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kindex — Every agent is smart inside its own silo. Kindex lets them work together.</title>
+<meta name="description" content="Every agent is smart inside its own silo. Kindex lets them work together. A local knowledge graph that Claude Code, Codex, Gemini CLI, Google Antigravity, OpenCode, Cursor, and other MCP-capable agents all read and write. Free MCP plugin with CLI, reminders, wakeups, ingestion, and cache-optimized LLM retrieval.">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --accent: #58a6ff;
+    --accent2: #3fb950;
+    --accent3: #d2a8ff;
+    --accent4: #f0883e;
+    --code-bg: #0d1117;
+    --max-w: 960px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+  code, .mono { font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace; }
+
+  /* Hero */
+  .hero {
+    text-align: center;
+    padding: 80px 0 60px;
+    border-bottom: 1px solid var(--border);
+  }
+  .hero h1 {
+    font-size: 3rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .hero h1 span { color: var(--accent); }
+  .hero .tagline {
+    font-size: 1.25rem;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  .hero .subline {
+    font-size: 0.95rem;
+    color: var(--text-dim);
+    margin-bottom: 32px;
+    max-width: 540px;
+    margin-left: auto;
+    margin-right: auto;
+    opacity: 0.8;
+  }
+  .install-boxes {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .hero .install-box {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-size: 0.95rem;
+  }
+  .hero .install-box code { color: var(--accent2); }
+  .hero .install-box .prompt { color: var(--text-dim); }
+  .hero .install-box.primary { border-color: var(--accent); }
+  .badges {
+    margin-top: 20px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+  }
+  .badge.green { border-color: var(--accent2); color: var(--accent2); }
+  .badge.blue { border-color: var(--accent); color: var(--accent); }
+  .badge.purple { border-color: var(--accent3); color: var(--accent3); }
+  .badge.orange { border-color: var(--accent4); color: var(--accent4); }
+
+  /* Sections */
+  section {
+    padding: 60px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  section:last-of-type { border-bottom: none; }
+  section h2 {
+    font-size: 1.75rem;
+    margin-bottom: 24px;
+    font-weight: 600;
+  }
+  section h3 {
+    font-size: 1.1rem;
+    margin-bottom: 12px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* Feature cards */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card h3 { margin-bottom: 8px; }
+  .card p { color: var(--text-dim); font-size: 0.9rem; }
+  .card .icon { font-size: 1.5rem; margin-bottom: 8px; display: block; }
+
+  /* Callout */
+  .callout {
+    background: var(--surface);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 8px 8px 0;
+    padding: 20px 24px;
+    margin: 24px 0;
+    font-size: 0.95rem;
+  }
+  .callout strong { color: var(--text); }
+  .callout p { color: var(--text-dim); margin-top: 8px; }
+
+  /* Terminal */
+  .terminal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    overflow-x: auto;
+    white-space: pre;
+    font-size: 0.875rem;
+    line-height: 1.7;
+    margin-top: 16px;
+  }
+  .terminal .comment { color: var(--text-dim); }
+  .terminal .cmd { color: var(--accent2); }
+  .terminal .prompt { color: var(--text-dim); }
+  .terminal .output { color: var(--text); }
+  .terminal .flag { color: var(--accent3); }
+
+  /* Architecture */
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--text-dim);
+    margin-top: 16px;
+  }
+  .arch-diagram .highlight { color: var(--accent); }
+  .arch-diagram .green { color: var(--accent2); }
+
+  /* Tables */
+  .cmd-group { margin-bottom: 32px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+    margin-top: 8px;
+  }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+  td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  td code {
+    color: var(--accent2);
+    font-size: 0.85rem;
+  }
+
+  /* Integration */
+  .integration-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    font-size: 0.85rem;
+    overflow-x: auto;
+    margin-top: 16px;
+    white-space: pre;
+    color: var(--text);
+  }
+
+  /* Footer */
+  footer {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--accent); }
+
+  /* Tiers table */
+  .tiers { margin-top: 16px; }
+  .tiers td:nth-child(2) { font-family: 'SF Mono', monospace; color: var(--accent3); font-size: 0.85rem; }
+
+  /* Responsive */
+  @media (max-width: 600px) {
+    .hero h1 { font-size: 2rem; }
+    .hero .tagline { font-size: 1rem; }
+    .features { grid-template-columns: 1fr; }
+    section { padding: 40px 0; }
+    .install-boxes { flex-direction: column; align-items: center; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="container">
+    <h1><span>kin</span>dex</h1>
+    <p class="tagline">
+      Every agent is smart inside its own silo. Kindex lets them work together.
+    </p>
+    <p class="subline">
+      Kindex does one thing. It knows what you know.
+      A local knowledge graph that Claude Code, Codex, Gemini CLI, Google Antigravity, OpenCode, Cursor, and other MCP-capable agents all read and write, so none of them starts blind, loses project context, or misses scheduled follow-up work.
+      Kindex is the individual and codebase index; <a href="https://kinbase.tools">Kinbase</a> is the company product above it, in development.
+    </p>
+    <div class="install-boxes">
+      <div class="install-box primary mono">
+        <span class="prompt">$</span> <code>pip install 'kindex[mcp]'</code>
+      </div>
+      <div class="install-box mono">
+        <span class="prompt">$</span> <code>uv tool install 'kindex[mcp]'</code>
+      </div>
+      <div class="install-box mono">
+        <span class="prompt">$</span> <code>git clone https://github.com/wandercom/kindex && cd kindex && make install</code>
+      </div>
+    </div>
+    <div class="badges">
+      <span class="badge green">v0.49.0</span>
+      <span class="badge orange">MCP Plugin</span>
+      <span class="badge blue">78 MCP Tools</span>
+      <span class="badge purple">80+ CLI Commands</span>
+      <span class="badge">MIT License</span>
+      <span class="badge">Free</span>
+    </div>
+  </div>
+</div>
+
+<!-- Why Kindex -->
+<section>
+  <div class="container">
+    <h2>Why Kindex</h2>
+    <div class="callout">
+      <strong>Memory plugins capture what happened. Kindex captures what it means and how it connects.</strong>
+      <p>Most memory tools are session archives with search. Kindex is a weighted knowledge graph that grows intelligence over time &mdash; understanding relationships, surfacing constraints, and managing exactly how much context to inject based on your available token budget.</p>
+    </div>
+    <div class="features" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+      <div class="card">
+        <h3>Context-Aware by Design</h3>
+        <p>Five context tiers auto-select based on available tokens. When other plugins dump everything into context, Kindex gives you 200 tokens of executive summary or 4000 tokens of deep context &mdash; whatever fits. <strong>Your plugin doesn't eat the context window.</strong></p>
+      </div>
+      <div class="card">
+        <h3>Knowledge Graph, Not Log File</h3>
+        <p>Nodes have types, weights, domains, and audiences. Edges carry provenance and decay over time. The graph understands what matters &mdash; not just what was said.</p>
+      </div>
+      <div class="card">
+        <h3>Reviewed Memory, Not Transcript Replay</h3>
+        <p>Automatic capture is quarantined until an explicit, freshness-checked review promotes it. Verification, valid-time, invalidation, trusted-only retrieval, and bounded trusted resume keep stale or unverified state out of the agent's working context.</p>
+      </div>
+      <div class="card">
+        <h3>Operational Guardrails</h3>
+        <p>Constraints block deploys. Directives encode preferences. Watches flag attention items. Checkpoints run pre-flight. No other memory plugin has this.</p>
+      </div>
+      <div class="card">
+        <h3>Cache-Optimized LLM Retrieval</h3>
+        <p>Three-tier prompt architecture with Anthropic prompt caching. Stable knowledge cached at 10% cost. Query-relevant context predicted via graph expansion. Only the question pays full price. Transparent &mdash; <code>kin ask</code> just works better and cheaper.</p>
+      </div>
+      <div class="card">
+        <h3>Team &amp; Org Ready</h3>
+        <p><code>.kin</code> inheritance chains let a service repo inherit from a platform context, which inherits from an org voice. Private/team/org/public scoping with PII stripping on export.</p>
+      </div>
+      <div class="card">
+        <h3>Session Tags</h3>
+        <p>Named work context handles that replace manual resume files. Start, pause, reactivate, segment, and complete exact project-scoped tags. After 60 days, cron or <code>kin archive run</code> can move completed unlinked tags to the reversible archive without distorting graph health. <code>kin tag start</code> / <code>kin tag resume</code>.</p>
+      </div>
+      <div class="card">
+        <h3>Bounded Graph Maintenance</h3>
+        <p>Dream stages sparse shared-domain links for review instead of turning tags into cliques. The pending queue is capped, resolved pairs stay resolved, deep summaries are deduplicated across runs, and semantic metrics remain separate from retained lifecycle history.</p>
+      </div>
+      <div class="card">
+        <h3>Reminders &amp; Actions</h3>
+        <p>Natural language scheduling with recurring support. Reminders can carry shell commands, Claude instructions, or headless Codex/OpenCode wakeups. The checker fires them when <code>kin cron</code>, <code>kin remind check</code>, or an installed schedule runs. <code>kin remind create "deploy" --at "in 1h" --wake codex</code>.</p>
+      </div>
+      <div class="card">
+        <h3>Adaptive Scheduling</h3>
+        <p>The cron daemon dynamically adjusts its check interval based on the nearest pending reminder. Reminder in 3 days? Check daily. Day of? Hourly. Within the hour? Every 5 minutes. No reminders? Daemon sleeps. Zero wasted cycles.</p>
+      </div>
+      <div class="card">
+        <h3>Policy-Aware Editing</h3>
+        <p>Edit nodes in place without losing history. Concepts and documents edit freely; decisions and constraints only grow (append) or get superseded with a linked replacement. Every edit logs per-field value diffs. <code>kin edit</code> / <code>kin supersede</code>.</p>
+      </div>
+      <div class="card">
+        <h3>Graph Profiles</h3>
+        <p>One machine, multiple sequestered graphs &mdash; work and personal knowledge never mix. Profiles resolve by flag, env, project config, or directory roots, and each database is stamped so a wrong path can't cross-contaminate. <code>kin profile create work --data-dir ~/.kindex-work</code>.</p>
+      </div>
+      <div class="card">
+        <h3>Multi-Agent Collab</h3>
+        <p>Agents join shared conversations with unread tracking, targeted messages, standing inject messages pushed into members' context, and advisory locks on shared resources. <code>coord_join</code> / <code>coord_inject</code> / <code>lock_acquire</code>.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Encouraging Agents -->
+<section>
+  <div class="container">
+    <h2>Getting Agents to Actually Use It</h2>
+    <div class="callout">
+      <strong>Installing tools is not enough. Agents won't use them proactively unless you tell them to.</strong>
+      <p>Kindex ships with recommended instruction files and lifecycle hooks that turn passive tools into active habits. The difference between "an agent has a knowledge graph" and "an agent actively maintains a knowledge graph" is the right setup command for that client.</p>
+      <p>Humans can follow the <a href="human-guide.md">human setup guide</a>. Agents should follow the <a href="mcp-agent-guide.md">MCP agent guide</a>.</p>
+    </div>
+    <div class="terminal mono">
+<span class="comment"># Claude Code: CLAUDE.md + lifecycle hooks</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-claude-md</span> <span class="flag">--install</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-hooks</span>
+
+<span class="comment"># Codex: MCP + hooks + AGENTS.md</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-codex-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-codex-hooks</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-agents-md</span> <span class="flag">--install</span> <span class="flag">--global</span>
+
+<span class="comment"># Gemini CLI: MCP + GEMINI.md</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-gemini-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-gemini-md</span> <span class="flag">--install</span>
+
+<span class="comment"># Google Antigravity: MCP + hooks + GEMINI.md</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-hooks</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-md</span> <span class="flag">--install</span>
+
+<span class="comment"># OpenCode: MCP + AGENTS.md</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-opencode-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-agents-md</span> <span class="flag">--install</span>
+
+<span class="comment"># Cursor: MCP + always-applied rule</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-cursor-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-cursor-rules</span> <span class="flag">--install</span>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">The directives add:</p>
+    <div class="features" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-top: 8px;">
+      <div class="card">
+        <h3>Session Lifecycle</h3>
+        <p>Start/segment/end rules so each agent tags sessions and tracks context across conversations.</p>
+      </div>
+      <div class="card">
+        <h3>Capture Triggers</h3>
+        <p>Explicit rules for what to <code>add</code>: discoveries, decisions, key files, notable outputs, new terms, open questions.</p>
+      </div>
+      <div class="card">
+        <h3>Search Discipline</h3>
+        <p>Always <code>search</code> before <code>add</code>. Always check existing knowledge before starting work. No duplicates.</p>
+      </div>
+      <div class="card">
+        <h3>Bulk Extraction</h3>
+        <p>Use <code>learn</code> after reading long files or completing complex tasks to auto-extract and index concepts.</p>
+      </div>
+      <div class="card">
+        <h3>Wakeup Reminders</h3>
+        <p>Create reminders that run shell actions or launch headless Codex/OpenCode follow-up turns when the checker fires. Kindex records and dispatches due reminders; it does not interrupt an idle terminal UI by itself.</p>
+      </div>
+      <div class="card">
+        <h3>Project <code>.kin/</code> Contract</h3>
+        <p>Stage git-tracked <code>.kin/</code> artifacts alongside code. Generated <code>.kin/index.json</code> and <code>.kin/code-map.json</code> are never hand-resolved: <code>kin index</code> auto-registers a structured merge driver (<code>kin merge-kin</code>) that unions distinct identities across branches. Same-ID index conflicts select by timestamp (ties keep ours); code-map conflicts can keep ours. Preserve input snapshots and relevant knowledge before regeneration: a successful merge is not a lossless conflict archive.</p>
+      </div>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">Lifecycle hooks reinforce these directives where the client exposes hook surfaces; instruction files cover clients that only expose MCP and rules.</p>
+  </div>
+</section>
+
+<!-- Real-world Demo -->
+<section>
+  <div class="container">
+    <h2>In Practice</h2>
+    <p>A 162-file fantasy novel vault &mdash; characters, locations, magic systems, plot outlines &mdash; ingested in one pass. Cross-referenced by content mentions. Searched in milliseconds.</p>
+    <div class="terminal mono">
+<span class="prompt">$</span> <span class="cmd">kin status</span>
+<span class="output">Nodes:     192</span>
+<span class="output">Edges:     11,802</span>
+<span class="output">Orphans:   3</span>
+
+<span class="prompt">$</span> <span class="cmd">time kin search</span> "the Baker"
+<span class="output"># Kindex: 10 results for "the Baker"</span>
+<span class="output"></span>
+<span class="output">## [document] The Baker - Hessa's Profile and Message Broker System (w=0.70)</span>
+<span class="output">  &rarr; Thieves Guild, Five Marks, Thieves Guild Operations</span>
+<span class="output"></span>
+<span class="output">## [document] Hessa the Baker's Story (w=0.70)</span>
+<span class="output">  &rarr; Mia -- Backstory, Mia -- Character Arc</span>
+<span class="output"></span>
+<span class="output">## [person] Mia and The Baker (Hessa) -- Relationship (w=0.70)</span>
+<span class="output">  &rarr; Sebastian and Mia, Mia -- Motivations and Goals</span>
+<span class="output"></span>
+<span class="output" style="color: var(--accent2);">0.142 total</span>
+
+<span class="prompt">$</span> <span class="cmd">kin graph stats</span>
+<span class="output">Nodes:      192</span>
+<span class="output">Edges:      11,802</span>
+<span class="output">Density:    0.3218</span>
+<span class="output">Components: 5</span>
+<span class="output">Avg degree: 122.94</span>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">192 nodes. 11,802 edges. 5 context tiers. Hybrid FTS5 + graph traversal in 142ms.</p>
+  </div>
+</section>
+
+<!-- Install as Plugin -->
+<section>
+  <div class="container">
+    <h2>Install as Agent MCP Plugin</h2>
+    <p>Claude Code, Codex, Gemini CLI, Google Antigravity, OpenCode, Cursor, and other MCP-capable agents get native tools for your knowledge graph. Pick whichever installer you already use &mdash; <code>pip</code>, <code>uv tool</code>, <code>uvx</code>, or <code>git clone &amp;&amp; make install</code>.</p>
+    <div class="terminal mono">
+<span class="comment"># Claude Code</span>
+<span class="prompt">$</span> <span class="cmd">claude mcp add</span> <span class="flag">--scope</span> user <span class="flag">--transport</span> stdio kindex <span class="flag">--</span> kin-mcp
+<span class="prompt">$</span> <span class="cmd">kin init</span>
+
+<span class="comment"># Codex</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-codex-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-codex-hooks</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-agents-md</span> <span class="flag">--install</span> <span class="flag">--global</span>
+
+<span class="comment"># Gemini CLI</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-gemini-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-gemini-md</span> <span class="flag">--install</span>
+
+<span class="comment"># Google Antigravity</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-hooks</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-antigravity-md</span> <span class="flag">--install</span>
+
+<span class="comment"># OpenCode (also reads AGENTS.md)</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-opencode-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-agents-md</span> <span class="flag">--install</span> <span class="flag">--global</span>
+
+<span class="comment"># Cursor</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-cursor-mcp</span>
+<span class="prompt">$</span> <span class="cmd">kin setup-cursor-rules</span> <span class="flag">--install</span>
+
+<span class="comment"># That's it. Your agent now has:</span>
+<span class="output">  search      &mdash; hybrid FTS5 + graph search</span>
+<span class="output">  add         &mdash; capture knowledge with auto-linking</span>
+<span class="output">  context     &mdash; formatted context block at any tier</span>
+<span class="output">  show        &mdash; full node details with edges</span>
+<span class="output">  ask         &mdash; question classification + answer</span>
+<span class="output">  learn       &mdash; extract knowledge from text</span>
+<span class="output">  link        &mdash; create edges between nodes</span>
+<span class="output">  edit        &mdash; policy-aware in-place edit with value diffs</span>
+<span class="output">  supersede   &mdash; replace a node, preserving history</span>
+<span class="output">  list_nodes  &mdash; browse with filters</span>
+<span class="output">  status      &mdash; graph health + operational summary</span>
+<span class="output">  suggest     &mdash; bridge opportunity suggestions</span>
+<span class="output">  graph_stats &mdash; centrality, communities, density</span>
+<span class="output">  changelog   &mdash; recent changes</span>
+<span class="output">  ingest      &mdash; ingest from external sources</span>
+<span class="output">  tag_start   &mdash; start a named session tag</span>
+<span class="output">  tag_update  &mdash; update/segment/pause/end a session tag</span>
+<span class="output">  tag_resume  &mdash; resume a session with full context</span>
+<span class="output">  remind_create &mdash; create a reminder with NL scheduling</span>
+<span class="output">  remind_list   &mdash; list active reminders</span>
+<span class="output">  remind_snooze &mdash; snooze a reminder</span>
+<span class="output">  remind_done   &mdash; complete a reminder</span>
+<span class="output">  remind_check  &mdash; fire due reminders now</span>
+<span class="output">  remind_exec   &mdash; execute a reminder's action</span>
+<span class="output">  coord_join    &mdash; join a multi-agent collab conversation</span>
+<span class="output">  coord_attach  &mdash; attach a node as a shared resource</span>
+<span class="output">  coord_inject  &mdash; standing messages pushed to members' context</span>
+<span class="output">  lock_acquire  &mdash; advisory lock on a node (TTL, expiring)</span>
+<span class="output">  lock_release  &mdash; release an advisory lock</span>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">Or add <code>.mcp.json</code> to any repo for project-scope access:</p>
+    <div class="integration-block mono">{ "mcpServers": { "kindex": { "command": "kin-mcp" } } }</div>
+    <p style="margin-top: 16px; color: var(--text-dim);">Also works as a standalone CLI (<code>kin search</code>, <code>kin add</code>, etc.) and via agent lifecycle hooks. Use whichever integration fits your workflow. Per-client and per-instance behavior can be tuned with <code>kin agent-config</code>. For durable work, agents should use Kindex tags and tasks, search before adding, and treat tracked <code>.kin</code> files as shipped project state; host-local task scratch is not a substitute for persistent graph state. See the <a href="human-guide.md">human guide</a> and <a href="mcp-agent-guide.md">agent guide</a> for complete setup.</p>
+  </div>
+</section>
+
+<!-- Context Tiers -->
+<section>
+  <div class="container">
+    <h2>Context Tiers</h2>
+    <p>The core differentiator. Other plugins inject context and hope for the best. Kindex manages exactly how much based on what's available.</p>
+    <table class="tiers">
+      <tr><th>Tier</th><th>Budget</th><th>Use Case</th></tr>
+      <tr><td>full</td><td>~4000 tokens</td><td>Session start, deep work &mdash; everything relevant</td></tr>
+      <tr><td>abridged</td><td>~1500 tokens</td><td>Mid-session reference &mdash; key facts and connections</td></tr>
+      <tr><td>summarized</td><td>~750 tokens</td><td>Quick orientation &mdash; what matters right now</td></tr>
+      <tr><td>executive</td><td>~200 tokens</td><td>Post-compaction &mdash; just the essentials</td></tr>
+      <tr><td>index</td><td>~100 tokens</td><td>Existence check &mdash; "I know about X"</td></tr>
+    </table>
+    <p style="margin-top: 16px; color: var(--text-dim);">Auto-selected via <code>--tokens</code> budget or set explicitly with <code>--level</code>. The MCP <code>context</code> tool does this automatically.</p>
+  </div>
+</section>
+
+<!-- Quick Start CLI -->
+<section>
+  <div class="container">
+    <h2>Quick Start (CLI)</h2>
+    <div class="terminal mono">
+<span class="comment"># Initialize a knowledge store</span>
+<span class="prompt">$</span> <span class="cmd">kin init</span>
+
+<span class="comment"># Add knowledge</span>
+<span class="prompt">$</span> <span class="cmd">kin add</span> "Stigmergy is coordination through environmental traces"
+<span class="output">Created node: stigmergy-is-coordination-th (concept)</span>
+
+<span class="comment"># Search with hybrid FTS5 + graph traversal</span>
+<span class="prompt">$</span> <span class="cmd">kin search</span> stigmergy
+<span class="output">  0.85  stigmergy-is-coordination-th  concept  Stigmergy is coordination...</span>
+
+<span class="comment"># Ask questions (with automatic classification)</span>
+<span class="prompt">$</span> <span class="cmd">kin ask</span> "How does weight decay work?"
+<span class="output">[procedural question]</span>
+
+<span class="comment"># Track operational rules</span>
+<span class="prompt">$</span> <span class="cmd">kin add</span> "Never break the API contract" <span class="flag">--type</span> constraint <span class="flag">--trigger</span> pre-deploy
+
+<span class="comment"># Ingest from all sources (GitHub, git, sessions, files)</span>
+<span class="prompt">$</span> <span class="cmd">kin ingest</span> all
+    </div>
+  </div>
+</section>
+
+<!-- Architecture -->
+<section>
+  <div class="container">
+    <h2>Architecture</h2>
+    <div class="arch-diagram mono"><span class="highlight">SQLite + FTS5</span>              primary store and full-text search
+  nodes: id, title, content, type, weight, audience, domains, extra
+  edges: from_id, to_id, type, weight, provenance
+  fts5:  content synced via triggers
+
+<span class="green">Retrieval pipeline:</span>
+  FTS5 BM25 ──┐
+  Graph BFS ──┼── <span class="highlight">RRF merge</span> ── tier formatter ── context block
+  (vectors) ──┘                   |
+      │                   <span class="green">full | abridged | summarized | executive | index</span>
+  <span class="green">Embedding providers</span> (configurable):
+      <span class="highlight">voyage-context-4</span> (contextual chunks) | <span class="highlight">openai</span> | <span class="highlight">gemini</span> | <span class="highlight">local</span>
+
+<span class="green">LLM cache tiers</span> (kin ask):
+  Tier 1: codebook (stable node index)     <span class="highlight">cached @ 10% cost</span>
+  Tier 2: query-relevant context           <span class="highlight">cached per-topic @ 10% cost</span>
+  Tier 3: user question                    full price, tiny
+
+<span class="green">Reminders:</span>
+  reminders table (SQLite)      separate from knowledge graph
+  Time parsing:  dateparser (NL) + dateutil.rrule (recurrence) + cronsim (cron)
+  Channels:      <span class="highlight">system</span> (macOS) | <span class="highlight">slack</span> | <span class="highlight">email</span> | <span class="highlight">claude</span> (hook) | <span class="highlight">terminal</span>
+  Daemon:        launchd/cron <span class="highlight">adaptive interval</span> ── check due ── notify ── auto-snooze
+  Scheduling:    adaptive tiers (&gt;7d=daily, &gt;1d=hourly, &gt;1h=10min, &lt;1h=5min, none=disabled)
+  Actions:       shell commands | <span class="highlight">claude -p</span> | <span class="highlight">codex exec</span> | <span class="highlight">opencode run</span>
+                 wakeups are headless daemon/cron turns, not idle-TUI interrupts
+  Stop guard:    optional block when actionable reminders are pending
+
+<span class="green">Three integration paths:</span>
+  MCP plugin ──&gt; Claude calls tools natively (search, add, learn, remind, ...)
+  CLI hooks  ──&gt; SessionStart/PreCompact/Stop lifecycle events
+  Adapters   ──&gt; Entry-point discovery for custom ingestion sources</div>
+
+    <h3 style="margin-top: 24px;">Node Types</h3>
+    <p><strong>Knowledge:</strong> concept, document, session, person, project, decision, question, artifact, skill</p>
+    <p><strong>Operational:</strong> constraint (invariants), directive (soft rules), checkpoint (pre-flight checks), watch (attention flags)</p>
+  </div>
+</section>
+
+<!-- .kin Inheritance -->
+<section>
+  <div class="container">
+    <h2>.kin Project Contract</h2>
+    <p>Repos ship <code>.kin/</code> with the code: project context, inheritance, graph snapshots, code maps, and optional work policy. Private runtime state stays in <code>~/.kindex</code> or ignored <code>.kin/local</code> directories.</p>
+    <div class="features" style="grid-template-columns: 1fr 1fr 1fr;">
+      <div class="card">
+        <h3>Org Voice</h3>
+        <div class="integration-block mono" style="margin-top: 8px; font-size: 0.78rem;">
+# ~/.kindex/voices/acme.kin
+name: acme-voice
+audience: org
+voice:
+  tone: precise, direct
+  principles:
+    - Explain reasoning
+    - Be honest about trade-offs
+standards:
+  code_review:
+    - Every PR needs a "why"</div>
+      </div>
+      <div class="card">
+        <h3>Platform Team</h3>
+        <div class="integration-block mono" style="margin-top: 8px; font-size: 0.78rem;">
+# platform/.kin/config
+name: platform
+audience: org
+domains: [engineering]
+inherits:
+  - ~/.kindex/voices/acme.kin
+
+
+
+</div>
+      </div>
+      <div class="card">
+        <h3>Service Repo</h3>
+        <div class="integration-block mono" style="margin-top: 8px; font-size: 0.78rem;">
+# payments-service/.kin/config
+name: payments-service
+audience: team
+domains: [payments, python]
+inherits:
+  - ../platform/.kin/config
+work_policy:
+  require_active_tag: true
+  linear:
+    enabled: true
+    require_issue: true
+    team: ENG
+
+
+</div>
+      </div>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">The payments service gets inherited voice and standards plus its own policy. Linear enforcement is opt-in: personal projects leave <code>work_policy.linear.enabled</code> false or absent. Kindex resolves config from <code>--project-path</code>, <code>KIN_PROJECT_PATH</code>, <code>KIN_PROJECT</code>, git root, then cwd. Store selection prefers an explicit project selector, then a present <code>.kin/local</code> store, configured <code>data_dir</code>, and finally <code>~/.kindex</code>; a tracked or symlinked selected local store is refused rather than silently falling back. Tracked <code>.kin</code> artifacts must be self-contained and machine-portable: code-map paths are repo-relative POSIX paths, and task/report metadata must not point at a developer-local filesystem location. <a href="https://github.com/wandercom/kindex/tree/main/examples/kin-voices">Example voice files included.</a></p>
+    <div class="features" style="grid-template-columns: 1fr 1fr; margin-top: 20px;">
+      <div class="card">
+        <h3>Graph Export</h3>
+        <p><code>kin export</code> emits audience-aware graph data for backup, exchange, and graph-level tooling.</p>
+      </div>
+      <div class="card">
+        <h3>Code Map Export</h3>
+        <p><code>kin export code-map</code> emits current repo structure, dependencies, layers, and repo-relative file paths for dashboards, code navigation, and agent tooling.</p>
+      </div>
+    </div>
+    <p style="margin-top: 16px; color: var(--text-dim);">For code-map output, <code>src/file.py</code> is portable; <code>/Users/alice/repo/src/file.py</code> and <code>C:\repo\src\file.py</code> are not. Outside-root, malformed, or unresolved paths are omitted rather than leaked into the tracked artifact.</p>
+  </div>
+</section>
+
+<!-- External Integrations -->
+<section>
+  <div class="container">
+    <h2>Integrations</h2>
+    <div class="features" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
+      <div class="card">
+        <h3>GitHub</h3>
+        <p>Ingest issues, PRs, and commits via <code>gh</code> CLI.</p>
+      </div>
+      <div class="card">
+        <h3>Linear</h3>
+        <p>Ingest issues via GraphQL API; enforcement only runs when project policy opts in.</p>
+      </div>
+      <div class="card">
+        <h3>Git Hooks</h3>
+        <p>Pre-commit/pre-push can enforce opt-in project policy; post-commit records context.</p>
+      </div>
+      <div class="card">
+        <h3>File Watcher</h3>
+        <p>SHA-256 change detection for registered files.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CLI Reference -->
+<section>
+  <div class="container">
+    <h2>CLI Reference</h2>
+    <p style="color: var(--text-dim); margin-bottom: 24px;">70+ commands organized by function. All support <code>--data-dir</code>, <code>--config</code>, <code>--profile</code>, and <code>--json</code> flags.</p>
+
+    <div class="cmd-group">
+      <h3>Core</h3>
+      <table>
+        <tr><td><code>kin search &lt;query&gt;</code></td><td>Hybrid FTS5 + graph search with RRF merging (<code>--trusted-only</code>)</td></tr>
+        <tr><td><code>kin context</code></td><td>Formatted context block for AI injection (<code>--level</code>, <code>--tokens</code>, <code>--trusted-only</code>)</td></tr>
+        <tr><td><code>kin add &lt;text&gt;</code></td><td>Quick capture with auto-extraction and linking</td></tr>
+        <tr><td><code>kin show &lt;id&gt;</code></td><td>Full node details with edges, provenance, and state</td></tr>
+        <tr><td><code>kin list</code></td><td>List nodes (--type, --status, --mine, --limit)</td></tr>
+        <tr><td><code>kin ask &lt;question&gt;</code></td><td>Question classification + LLM or context answer</td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Knowledge Management</h3>
+      <table>
+        <tr><td><code>kin learn</code></td><td>Extract knowledge from sessions and inbox</td></tr>
+        <tr><td><code>kin link &lt;a&gt; &lt;b&gt;</code></td><td>Create weighted edge between nodes</td></tr>
+        <tr><td><code>kin edit &lt;id&gt;</code></td><td>Policy-aware in-place edit (--title, --content, --append, --expires)</td></tr>
+        <tr><td><code>kin supersede &lt;id&gt; &lt;text&gt;</code></td><td>Replace a node with a new one, preserving history</td></tr>
+        <tr><td><code>kin alias &lt;id&gt;</code></td><td>Manage AKA/synonyms for a node</td></tr>
+        <tr><td><code>kin register &lt;id&gt; &lt;path&gt;</code></td><td>Associate a file path with a node</td></tr>
+        <tr><td><code>kin orphans</code></td><td>Nodes with no connections</td></tr>
+        <tr><td><code>kin trail &lt;id&gt;</code></td><td>Temporal history and provenance chain</td></tr>
+        <tr><td><code>kin decay</code></td><td>Apply weight decay to stale nodes/edges</td></tr>
+        <tr><td><code>kin recent</code></td><td>Recently active nodes</td></tr>
+        <tr><td><code>kin tag [action]</code></td><td>Session tags: start, update, segment, pause, end, resume, list, show</td></tr>
+        <tr><td><code>kin candidate [action]</code></td><td>Quarantined capture review: list, show, accept, reject, prune, erase</td></tr>
+        <tr><td><code>kin verify &lt;node&gt;</code></td><td>Assert verification provenance and optional valid-time interval</td></tr>
+        <tr><td><code>kin invalidate &lt;node&gt;</code></td><td>Record asserted invalidation actor, code, and exclusive end time</td></tr>
+        <tr><td><code>kin remind [action]</code></td><td>Reminders: create, list, show, snooze, done, cancel, check, exec, and <code>--wake codex|opencode</code></td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Graph Analytics</h3>
+      <table>
+        <tr><td><code>kin graph [mode]</code></td><td>Dashboard: stats, centrality, communities, bridges, trailheads</td></tr>
+        <tr><td><code>kin suggest</code></td><td>Bridge opportunity suggestions (--accept, --reject)</td></tr>
+        <tr><td><code>kin skills [person]</code></td><td>Skill profile and expertise for a person</td></tr>
+        <tr><td><code>kin embed</code></td><td>Index nodes for vector similarity search</td></tr>
+        <tr><td><code>kin embed plan/enqueue/reindex/drain/status</code></td><td>Scoped embedding maintenance for full or gradual reindexing</td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Operational</h3>
+      <table>
+        <tr><td><code>kin status</code></td><td>Graph health + operational summary (--trigger, --owner)</td></tr>
+        <tr><td><code>kin set-audience &lt;id&gt;</code></td><td>Set privacy scope (private/team/org/public)</td></tr>
+        <tr><td><code>kin set-state &lt;id&gt; &lt;k&gt; &lt;v&gt;</code></td><td>Set mutable state on directives/watches</td></tr>
+        <tr><td><code>kin export</code></td><td>Audience-aware graph export with PII stripping</td></tr>
+        <tr><td><code>kin export code-map</code></td><td>Repo-relative code map for dashboards, code navigation, and agent tooling</td></tr>
+        <tr><td><code>kin import &lt;file&gt;</code></td><td>Import nodes/edges from JSON/JSONL</td></tr>
+        <tr><td><code>kin sync-links</code></td><td>Update node content with connection references</td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Collab &amp; Multi-Agent</h3>
+      <table>
+        <tr><td><code>kin coord [action]</code></td><td>Agent coordination: start, post, read, list, end, join, attach, inject</td></tr>
+        <tr><td><code>kin lock &lt;id&gt;</code></td><td>Acquire an advisory lock on a node (--ttl, --note, --force)</td></tr>
+        <tr><td><code>kin unlock &lt;id&gt;</code></td><td>Release an advisory lock (--force for foreign locks)</td></tr>
+        <tr><td><code>kin profile [action]</code></td><td>Named graph profiles: list, which, create</td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Ingestion</h3>
+      <table>
+        <tr><td><code>kin ingest &lt;source&gt;</code></td><td>Ingest from: projects, sessions, files, commits, github, linear, all</td></tr>
+        <tr><td><code>kin cron</code></td><td>One-shot maintenance cycle (for crontab/launchd)</td></tr>
+        <tr><td><code>kin watch</code></td><td>Watch for new sessions and ingest (--interval)</td></tr>
+        <tr><td><code>kin analytics</code></td><td>Archive session analytics and activity heatmap</td></tr>
+        <tr><td><code>kin index</code></td><td>Write .kin/index.json for git tracking</td></tr>
+      </table>
+    </div>
+
+    <div class="cmd-group">
+      <h3>Infrastructure</h3>
+      <table>
+        <tr><td><code>kin init</code></td><td>Initialize data directory</td></tr>
+        <tr><td><code>kin config [show|get|set]</code></td><td>View or edit configuration</td></tr>
+        <tr><td><code>kin agent-config [show|set]</code></td><td>View or tune per-client/per-instance agent behavior overrides</td></tr>
+        <tr><td><code>kin policy [show|check]</code></td><td>Show/check project work policy from tracked <code>.kin/config</code></td></tr>
+        <tr><td><code>kin setup-hooks</code></td><td>Install lifecycle hooks into Claude Code</td></tr>
+        <tr><td><code>kin setup-codex-mcp</code></td><td>Install kindex MCP server into Codex</td></tr>
+        <tr><td><code>kin setup-gemini-mcp</code></td><td>Install kindex MCP server into Gemini CLI</td></tr>
+        <tr><td><code>kin setup-antigravity-mcp</code></td><td>Install kindex MCP server into Google Antigravity</td></tr>
+        <tr><td><code>kin setup-antigravity-hooks</code></td><td>Install lifecycle hooks into Google Antigravity</td></tr>
+        <tr><td><code>kin setup-opencode-mcp</code></td><td>Install kindex MCP server into OpenCode</td></tr>
+        <tr><td><code>kin setup-cursor-mcp</code></td><td>Install kindex MCP server into Cursor</td></tr>
+        <tr><td><code>kin setup-cron</code></td><td>Install periodic maintenance (launchd/crontab)</td></tr>
+        <tr><td><code>kin setup-claude-md</code></td><td>Output/install recommended CLAUDE.md directives</td></tr>
+        <tr><td><code>kin setup-agents-md</code></td><td>Output/install AGENTS.md directives (Codex, OpenCode)</td></tr>
+        <tr><td><code>kin setup-gemini-md</code></td><td>Output/install GEMINI.md directives</td></tr>
+        <tr><td><code>kin setup-antigravity-md</code></td><td>Output/install Antigravity/GEMINI.md directives</td></tr>
+        <tr><td><code>kin setup-cursor-rules</code></td><td>Output/install Cursor rule (.mdc) for kindex</td></tr>
+        <tr><td><code>kin stop-guard</code></td><td>Stop hook guard for actionable reminders</td></tr>
+        <tr><td><code>kin doctor</code></td><td>Health check with graph enforcement</td></tr>
+        <tr><td><code>kin migrate</code></td><td>Import markdown topics into SQLite</td></tr>
+        <tr><td><code>kin budget</code></td><td>LLM spend tracking</td></tr>
+        <tr><td><code>kin whoami</code></td><td>Show current user identity</td></tr>
+        <tr><td><code>kin changelog</code></td><td>What changed (--since, --days, --actor)</td></tr>
+        <tr><td><code>kin log</code></td><td>Recent activity log</td></tr>
+        <tr><td><code>kin git-hook</code></td><td>Install/uninstall git hooks in a repository</td></tr>
+        <tr><td><code>kin prime</code></td><td>Generate context for SessionStart hook (--codebook)</td></tr>
+        <tr><td><code>kin compact-hook</code></td><td>Pre-compact knowledge capture</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="container">
+    <p>
+      <a href="https://github.com/wandercom/kindex">GitHub</a> &middot;
+      <a href="https://github.com/wandercom/kindex/issues">Issues</a> &middot;
+      <a href="human-guide.md">Human Guide</a> &middot;
+      <a href="mcp-agent-guide.md">Agent Guide</a> &middot;
+      <a href="https://github.com/wandercom/kindex/tree/main/examples/kin-voices">Voice Examples</a> &middot;
+      MIT License &middot;
+      Free
+    </p>
+    <p style="margin-top: 8px;">v0.49.0 &middot; MCP Plugin &middot; 78 MCP Tools &middot; 80+ CLI Commands &middot; CI Verified</p>
+    <p style="margin-top: 8px;">A <a href="https://github.com/wandercom">Wander</a> project. &copy; 2026 Wander. MIT License.</p>
+    <p style="margin-top: 8px;">
+      <a href="https://kindex.tools">kindex.tools</a> &middot;
+      <a href="https://kinbase.tools">kinbase.tools</a> &middot;
+      <a href="https://wandercom.github.io/kindex/">wandercom.github.io/kindex</a> &middot;
+      <a href="https://signet.tools">signet.tools</a> &middot;
+      <a href="https://byoa.tools">byoa.tools</a>
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

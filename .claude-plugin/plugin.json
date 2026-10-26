@@ -1,0 +1,30 @@
+{
+  "name": "kindex",
+  "displayName": "Kindex",
+  "description": "Every agent is smart inside its own silo. Kindex lets them work together: a persistent knowledge graph that Claude Code, Codex, Gemini CLI, Antigravity, OpenCode, and Cursor all read and write.",
+  "version": "0.49.0",
+  "author": {
+    "name": "Wander",
+    "url": "https://github.com/wandercom"
+  },
+  "homepage": "https://kindex.tools/",
+  "repository": "https://github.com/wandercom/kindex",
+  "license": "MIT",
+  "keywords": [
+    "knowledge-graph",
+    "memory",
+    "context",
+    "ai-assistant",
+    "claude-code",
+    "mcp"
+  ],
+  "documentationUrl": "https://kindex.tools/",
+  "supportUrl": "https://github.com/wandercom/kindex/issues",
+  "privacyPolicyUrl": "https://github.com/wandercom/kindex/blob/main/PRIVACY.md",
+  "mcpServers": {
+    "kindex": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/claude-plugin/kin-mcp",
+      "args": []
+    }
+  }
+}

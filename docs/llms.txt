@@ -1,0 +1,65 @@
+# Kindex
+
+Kindex is a local-first persistent knowledge graph and MCP server that Claude Code, Codex, Gemini CLI, Google Antigravity, OpenCode, Cursor, and other MCP-capable agents all read and write. Every agent is smart inside its own silo; Kindex lets them work together: continuity across sessions and restarts, handoffs between vendors, shared decisions and constraints, and live coordination channels. Kindex is the individual and codebase index (a personal SQLite graph plus the repository's git-tracked .kin/). Kinbase (https://kinbase.tools) is the company product above it, in development: organization-wide direction, architecture, standards, and ownership held by named authorities. Same engine, same protocol, physically separate stores.
+
+Core docs:
+
+- Human setup guide: https://kindex.tools/human-guide.md
+- AI/MCP agent guide: https://kindex.tools/mcp-agent-guide.md
+- GitHub repo: https://github.com/wandercom/kindex
+- PyPI package: https://pypi.org/project/kindex/
+- GitHub Pages docs build: https://wandercom.github.io/kindex/
+- Changelog: https://github.com/wandercom/kindex/blob/main/CHANGELOG.md
+
+Install:
+
+```bash
+pip install 'kindex[mcp]'
+uv tool install 'kindex[mcp]'
+uvx --from 'kindex[mcp]' kin-mcp --help
+kin init
+```
+
+Agent setup:
+
+```bash
+kin setup-codex-mcp
+kin setup-codex-hooks
+kin setup-agents-md --install --global
+
+kin setup-opencode-mcp
+kin setup-agents-md --install --global
+```
+
+Reminder wakeups:
+
+```bash
+kin setup-cron
+kin remind create "Continue rollout check" --at "in 10 minutes" \
+  --wake codex --session last --cwd "$PWD" \
+  --instructions "Check the rollout and fix any new failures."
+kin remind create "Continue OpenCode build" --at "in 10 minutes" \
+  --wake opencode --session last --cwd "$PWD" --wake-agent build \
+  --instructions "Continue the build triage."
+```
+
+Boundary: `remind_create` records a reminder. Due reminders fire only when `kin remind check`, `kin remind exec`, `kin cron`, or an installed `kin setup-cron` schedule runs. Codex/OpenCode wakeups start headless turns from that checker context; Kindex does not interrupt an idle interactive TUI by itself.
+
+Reviewed memory:
+
+```bash
+kin candidate list --status pending
+kin candidate show <candidate-id>
+kin candidate accept <candidate-id> --review-token <token> --by reviewer --method source-check
+kin verify <node-id> --by reviewer --method source-check
+kin search "release state" --trusted-only
+kin context --topic release --trusted-only
+```
+
+Automatic hook extraction creates quarantined candidates, never durable graph nodes or edges. Promotion is an explicit, freshness-checked review action. Trusted-only retrieval and session resume admit active, explicitly verified state; invalidated, expired, superseded, archived, and unverified material stays outside that projection.
+
+Since v0.36.0, paused-session resume reactivates the exact project tag; completed unlinked sessions become archive-eligible after 60 days during `kin cron` step 8 or `kin archive run`; semantic graph metrics exclude lifecycle nodes and legacy tag-derived Dream edges and identify the machine contract as `metrics_schema: 2`; and Dream (Kindex's background consolidation pass) stages a sparse review queue capped by `reminders.dream_max_domain_link_suggestions` (default 50) instead of writing shared-domain cliques. Suggestions persist title-versus-node-ID identity and refuse ambiguous titles. Archive cycles report, but never guess-delete, IDs present in both the live database and slow archive. Schema upgrades create, validate, and durably record an owner-private recovery snapshot in a dedicated, non-rotating migration directory and serialize concurrent new-version migrators with a rollback-journal SQLite lock. Stop every Kindex process and move the live DB's `-wal` and `-shm` sidecars aside before restoring that snapshot; do not run v0.35.x against a migrated store.
+
+## Periodic supervision and notifications
+
+[Supervision and independent health](https://kindex.tools/supervisor-health.md): configure periodic goal, direction, adherence, and validation reviews for Claude, Codex, OpenCode, Antigravity, and Cursor. Independent monitoring tracks invocation, use, review, delivery, and explicit usefulness. Native macOS alerts and a durable inbox need no Postfix; root mail remains opt-in. Cursor authenticated delivery and IDE discovery remain unverified.

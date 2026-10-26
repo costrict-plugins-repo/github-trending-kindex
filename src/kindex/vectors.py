@@ -1,0 +1,1627 @@
+"""Optional vector embedding support via sqlite-vec.
+
+Enables semantic similarity search when installed:
+    pip install kindex[vectors]          # just sqlite-vec; API-based providers work out of the box
+    pip install sentence-transformers    # opt-in for local embeddings (pulls torch + sklearn)
+
+Supports multiple embedding providers:
+    - voyage: Voyage AI Embeddings API (requires VOYAGE_API_KEY) — recommended default
+    - openai: OpenAI Embeddings API (requires OPENAI_API_KEY)
+    - gemini: Google Gemini Embeddings API (requires GEMINI_API_KEY)
+    - local: sentence-transformers (requires separate pip install sentence-transformers)
+
+Falls back gracefully to FTS5 when the configured provider is unavailable.
+"""
+
+from __future__ import annotations
+
+import json
+import hashlib
+import math
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from .privacy import redact, redact_serialized, redact_text, safe_error
+from .privacy import redacting_print as print
+
+if TYPE_CHECKING:
+    from .config import Config, EmbeddingConfig
+    from .store import Store
+
+_VEC_AVAILABLE = None
+_MODEL = None
+
+# Provider defaults: model, dimensions, api_key_env
+PROVIDER_DEFAULTS = {
+    "local": {"model": "all-MiniLM-L6-v2", "dimensions": 384, "api_key_env": ""},
+    "openai": {"model": "text-embedding-3-small", "dimensions": 1536, "api_key_env": "OPENAI_API_KEY"},
+    "gemini": {"model": "gemini-embedding-001", "dimensions": 3072, "api_key_env": "GEMINI_API_KEY"},
+    "voyage": {"model": "voyage-context-4", "dimensions": 1024, "api_key_env": "VOYAGE_API_KEY"},
+}
+
+EMBED_QUEUE_META = "embed.queue"
+EMBED_QUARANTINE_META = "embed.quarantine.v1"
+EMBED_QUARANTINE_VERSION = 1
+# These are per-input limits, not batch limits.  Only add a limit here when it
+# is part of the provider/model contract we can safely preflight.  Unknown
+# models continue through the provider boundary, where a deterministic 400 is
+# still quarantined by the normal drain path.
+SINGLE_INPUT_TOKEN_LIMITS = {
+    ("openai", "text-embedding-3-small"): 8192,
+    ("openai", "text-embedding-3-large"): 8192,
+}
+EMBEDDING_PRICE_PER_MILLION = {
+    ("voyage", "voyage-context-4"): 0.12,
+    ("voyage", "voyage-context-3"): 0.18,
+    ("voyage", "voyage-3.5"): 0.06,
+    ("voyage", "voyage-3-large"): 0.18,
+}
+
+
+class _EmbeddingOptions(TypedDict):
+    strategy: str
+    chunk_chars: int
+    chunk_overlap_chars: int
+    max_group_chunks: int
+    reindex_max_jobs: int
+    reindex_max_queue: int
+    drain_time_budget: int
+
+
+class _OversizedQueueInput(TypedDict):
+    node_id: str
+    text_hash: str
+    token_estimate: int
+
+
+class _EmbeddingQueueDiagnosis(TypedDict):
+    queue_pending: int
+    provider: str
+    model: str
+    single_input_token_limit: int | None
+    oversized: list[_OversizedQueueInput]
+
+
+class _EmbeddingQueueRemediation(_EmbeddingQueueDiagnosis):
+    quarantined_now: int
+
+
+@dataclass(frozen=True)
+class _EmbeddingOutcome:
+    """Internal outcome used by the queue drain without changing bool callers."""
+
+    ok: bool
+    terminal: bool = False
+    kind: str | None = None
+    http_status: int | None = None
+    message: str | None = None
+
+
+class _EmbeddingQuarantineRecord(BaseModel):
+    """Persistent terminal-failure state for one node/text/config triple."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: str = "terminal_failure"
+    http_status: int | None = None
+    message: str = ""
+    text_hash: str = ""
+    fingerprint: str = ""
+    provider: str = ""
+    model: str = ""
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    attempts: int = 0
+
+    @field_validator("attempts", mode="before")
+    @classmethod
+    def _coerce_attempts(cls, value: Any) -> int:
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return 0
+
+    @field_validator("http_status", mode="before")
+    @classmethod
+    def _coerce_http_status(cls, value: Any) -> int | None:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+
+class _EmbeddingProviderError(Exception):
+    def __init__(self, *, kind: str, http_status: int | None, message: str):
+        super().__init__(message)
+        self.kind = kind
+        self.http_status = http_status
+
+
+class _EmbedOne(Protocol):
+    """The provider-call boundary used while assembling document vectors."""
+
+    def __call__(
+        self,
+        text: str,
+        config: Config | None = None,
+        *,
+        input_type: str = "document",
+    ) -> list[float] | None: ...
+
+
+def _provider_http_error(error: urllib.error.HTTPError) -> _EmbeddingProviderError:
+    """Classify deterministic input-size rejections without exposing payloads."""
+    try:
+        detail = error.read().decode("utf-8", errors="replace")
+    except Exception:
+        detail = ""
+    message = safe_error(Exception(detail or str(error)))
+    structured = ""
+    try:
+        payload = json.loads(detail)
+        if isinstance(payload, dict):
+            provider_error = payload.get("error", payload)
+            if isinstance(provider_error, dict):
+                structured = " ".join(
+                    str(provider_error.get(field, ""))
+                    for field in ("code", "type", "status", "reason")
+                )
+    except (TypeError, ValueError):
+        pass
+    normalized = f"{message} {structured}".lower()
+    input_too_large = error.code == 400 and (
+        "context length" in normalized
+        or "maximum context" in normalized
+        or "max context" in normalized
+        or "maximum input" in normalized
+        or "max input" in normalized
+        or ("maximum" in normalized and "length" in normalized)
+        or "maximum number of tokens" in normalized
+        or "max allowed tokens" in normalized
+        or "too many tokens" in normalized
+        or "input too long" in normalized
+        or "context_length_exceeded" in normalized
+        or "input_too_large" in normalized
+        or "token_limit_exceeded" in normalized
+    )
+    return _EmbeddingProviderError(
+        kind="input_too_large" if input_too_large else "provider_http_error",
+        http_status=error.code,
+        message=message,
+    )
+
+
+def _resolve_embedding_config(config: Config | None) -> tuple[str, str, int, str]:
+    """Resolve provider, model, dimensions, api_key_env from config.
+
+    Returns (provider, model, dimensions, api_key_env).
+    """
+    if config is None:
+        defaults = PROVIDER_DEFAULTS["voyage"]
+        return "voyage", defaults["model"], defaults["dimensions"], defaults["api_key_env"]
+
+    ec = config.embedding
+    provider = ec.provider
+    defaults = PROVIDER_DEFAULTS.get(provider, PROVIDER_DEFAULTS["local"])
+    model = ec.model or defaults["model"]
+    dims = ec.dimensions or defaults["dimensions"]
+    api_key_env = ec.api_key_env or defaults["api_key_env"]
+    return provider, model, dims, api_key_env
+
+
+def _embedding_options(config: Config | None) -> _EmbeddingOptions:
+    """Return embedding tuning options with defaults for old configs."""
+    ec = getattr(config, "embedding", None) if config is not None else None
+    return {
+        "strategy": (getattr(ec, "strategy", "") or "auto").lower(),
+        "chunk_chars": max(1, int(getattr(ec, "chunk_chars", 6000) or 6000)),
+        "chunk_overlap_chars": max(0, int(getattr(ec, "chunk_overlap_chars", 600) or 0)),
+        "max_group_chunks": max(1, int(getattr(ec, "max_group_chunks", 20) or 20)),
+        "reindex_max_jobs": max(1, int(getattr(ec, "reindex_max_jobs", 200) or 200)),
+        "reindex_max_queue": max(1, int(getattr(ec, "reindex_max_queue", 100000) or 100000)),
+        "drain_time_budget": max(1, int(getattr(ec, "drain_time_budget", 120) or 120)),
+    }
+
+
+def contextual_embeddings_supported(config: Config | None) -> bool:
+    """True when the configured provider/model can embed grouped chunks."""
+    provider, model, _, _ = _resolve_embedding_config(config)
+    return provider == "voyage" and _is_voyage_context_model(model)
+
+
+def embedding_strategy(config: Config | None) -> str:
+    """Return the effective document embedding strategy.
+
+    ``auto`` enables contextual chunk groups only for models that support them.
+    Explicit ``contextual`` is also provider-gated so unsupported providers fall
+    back to ``single`` instead of breaking existing users.
+    """
+    requested = _embedding_options(config)["strategy"]
+    if requested in {"contextual", "contextual_chunks", "chunked"}:
+        return "contextual" if contextual_embeddings_supported(config) else "single"
+    if requested == "single":
+        return "single"
+    return "contextual" if contextual_embeddings_supported(config) else "single"
+
+
+def embedding_fingerprint(config: Config | None) -> str:
+    """Stable fingerprint for deciding whether existing vectors are stale."""
+    provider, model, dims, _ = _resolve_embedding_config(config)
+    opts = _embedding_options(config)
+    strategy = embedding_strategy(config)
+    payload = {
+        "provider": provider,
+        "model": model,
+        "dimensions": dims,
+        "strategy": strategy,
+    }
+    if strategy == "contextual":
+        payload.update({
+            "chunk_chars": opts["chunk_chars"],
+            "chunk_overlap_chars": opts["chunk_overlap_chars"],
+            "max_group_chunks": opts["max_group_chunks"],
+        })
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _check_vec() -> bool:
+    """Check if sqlite-vec extension is available."""
+    global _VEC_AVAILABLE
+    if _VEC_AVAILABLE is not None:
+        return _VEC_AVAILABLE
+    try:
+        import sqlite_vec  # noqa: F401
+        _VEC_AVAILABLE = True
+    except ImportError:
+        _VEC_AVAILABLE = False
+    return _VEC_AVAILABLE
+
+
+def _get_model(model_name: str = "all-MiniLM-L6-v2"):
+    """Lazy-load the sentence transformer model."""
+    global _MODEL
+    if _MODEL is not None and getattr(_MODEL, '_kindex_model_name', None) == model_name:
+        return _MODEL
+    try:
+        from sentence_transformers import SentenceTransformer
+        _MODEL = SentenceTransformer(model_name, local_files_only=True)
+        _MODEL._kindex_model_name = model_name
+        return _MODEL
+    except ImportError:
+        print("Warning: sentence-transformers not installed. "
+              "Install with: pip install sentence-transformers", file=sys.stderr)
+        return None
+    except Exception as e:
+        print(f"Warning: local embedding model unavailable: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+def _embed_local(text: str, model_name: str) -> list[float] | None:
+    """Embed text using local sentence-transformers."""
+    model = _get_model(model_name)
+    if model is None:
+        return None
+    embedding = model.encode(text, normalize_embeddings=True)
+    return embedding.tolist()
+
+
+def _embed_openai(text: str, model: str, dimensions: int, api_key_env: str) -> list[float] | None:
+    """Embed text using OpenAI Embeddings API."""
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        print(f"Warning: {api_key_env} not set. Cannot embed text.", file=sys.stderr)
+        return None
+
+    body: dict[str, object] = {"input": text, "model": model}
+    if dimensions:
+        body["dimensions"] = dimensions
+
+    try:
+        req = urllib.request.Request(
+            "https://api.openai.com/v1/embeddings",
+            data=json.dumps(redact(body)).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            return result["data"][0]["embedding"]
+    except urllib.error.HTTPError as e:
+        raise _provider_http_error(e) from e
+    except Exception as e:
+        print(f"OpenAI embedding error: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+def _embed_gemini(text: str, model: str, dimensions: int, api_key_env: str) -> list[float] | None:
+    """Embed text using Google Gemini Embeddings API."""
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        print(f"Warning: {api_key_env} not set. Cannot embed text.", file=sys.stderr)
+        return None
+
+    body = {
+        "model": f"models/{model}",
+        "content": {"parts": [{"text": text}]},
+    }
+    if dimensions:
+        body["outputDimensionality"] = dimensions
+
+    try:
+        req = urllib.request.Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:embedContent",
+            data=json.dumps(redact(body)).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            if "embedding" in result and "values" in result["embedding"]:
+                return result["embedding"]["values"]
+            return None
+    except urllib.error.HTTPError as e:
+        raise _provider_http_error(e) from e
+    except Exception as e:
+        print(f"Gemini embedding error: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+def _is_voyage_context_model(model: str) -> bool:
+    """Return True for Voyage contextualized chunk embedding models."""
+    return model.startswith("voyage-context-")
+
+
+def _embed_voyage_context_chunks(
+    chunks: list[str],
+    model: str,
+    dimensions: int,
+    api_key_env: str,
+    *,
+    input_type: str = "document",
+) -> list[list[float]] | None:
+    """Embed a query or document chunk group with Voyage's contextual endpoint."""
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        print(f"Warning: {api_key_env} not set. Cannot embed text.", file=sys.stderr)
+        return None
+    if not chunks:
+        return []
+
+    body: dict[str, object] = {
+        "inputs": chunks if input_type == "query" else [chunks],
+        "model": model,
+        "input_type": input_type,
+    }
+    if dimensions:
+        body["output_dimension"] = dimensions
+
+    try:
+        req = urllib.request.Request(
+            "https://api.voyageai.com/v1/contextualizedembeddings",
+            data=json.dumps(redact(body)).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            if input_type == "query":
+                return [item["data"][0]["embedding"] for item in result["data"]]
+            items = sorted(result["data"][0]["data"], key=lambda item: item.get("index", 0))
+            return [item["embedding"] for item in items]
+    except urllib.error.HTTPError as e:
+        raise _provider_http_error(e) from e
+    except Exception as e:
+        print(f"Voyage embedding error: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+def _embed_voyage(
+    text: str,
+    model: str,
+    dimensions: int,
+    api_key_env: str,
+    input_type: str = "document",
+) -> list[float] | None:
+    """Embed text using Voyage AI Embeddings API.
+
+    Voyage ships as a pure-HTTP API with no native dependencies. Context models
+    use Voyage's contextualized endpoint; standard Voyage models keep using the
+    regular embeddings endpoint for backward-compatible custom configs.
+    """
+    api_key = os.environ.get(api_key_env)
+    if not api_key:
+        print(f"Warning: {api_key_env} not set. Cannot embed text.", file=sys.stderr)
+        return None
+
+    if _is_voyage_context_model(model):
+        embeddings = _embed_voyage_context_chunks(
+            [text], model, dimensions, api_key_env, input_type=input_type
+        )
+        if not embeddings:
+            return None
+        return embeddings[0]
+
+    body = {
+        "input": [text],
+        "model": model,
+        "input_type": input_type,
+    }
+
+    try:
+        req = urllib.request.Request(
+            "https://api.voyageai.com/v1/embeddings",
+            data=json.dumps(redact(body)).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            return result["data"][0]["embedding"]
+    except urllib.error.HTTPError as e:
+        raise _provider_http_error(e) from e
+    except Exception as e:
+        print(f"Voyage embedding error: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+_EMBED_DISPATCH = {
+    "local": lambda text, model, dims, key_env, input_type: _embed_local(text, model),
+    "openai": lambda text, model, dims, key_env, input_type: _embed_openai(text, model, dims, key_env),
+    "gemini": lambda text, model, dims, key_env, input_type: _embed_gemini(text, model, dims, key_env),
+    "voyage": _embed_voyage,
+}
+
+
+def is_available() -> bool:
+    """Check if vector search is available."""
+    return _check_vec()
+
+
+def _embed_text_or_raise(
+    text: str,
+    config: Config | None = None,
+    *,
+    input_type: str = "document",
+) -> list[float] | None:
+    """Call a provider while retaining its typed failure for queue handling."""
+    provider, model, dims, api_key_env = _resolve_embedding_config(config)
+    fn = _EMBED_DISPATCH.get(provider)
+    if fn is None:
+        print(f"Warning: unknown embedding provider '{provider}'. "
+              f"Supported: {', '.join(PROVIDER_DEFAULTS)}", file=sys.stderr)
+        return None
+    return fn(redact_text(text), model, dims, api_key_env, input_type)
+
+
+def embed_text(
+    text: str,
+    config: Config | None = None,
+    *,
+    input_type: str = "document",
+) -> list[float] | None:
+    """Embed a text string into a vector using the configured provider."""
+    try:
+        return _embed_text_or_raise(text, config, input_type=input_type)
+    except _EmbeddingProviderError as e:
+        provider, _, _, _ = _resolve_embedding_config(config)
+        print(f"{provider.title()} embedding error: {safe_error(e)}", file=sys.stderr)
+        return None
+
+
+def _get_embedding_dim(config: Config | None) -> int:
+    """Get the embedding dimension for the configured provider."""
+    _, _, dims, _ = _resolve_embedding_config(config)
+    return dims
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _hash_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _estimate_tokens(text: str) -> int:
+    # Cheap, provider-independent estimate. Good enough for reindex planning.
+    return max(1, math.ceil(len(text) / 4))
+
+
+def _embedding_text_for_node(node: dict) -> str:
+    return redact_text(f"{node.get('title') or ''} {node.get('content') or ''}".strip())
+
+
+def _chunk_text(text: str, *, chunk_chars: int, overlap_chars: int) -> list[str]:
+    """Split text into stable overlapping chunks using character offsets."""
+    text = redact_text(text)
+    if not text:
+        return []
+    chunk_chars = max(1, chunk_chars)
+    overlap_chars = min(max(0, overlap_chars), chunk_chars - 1)
+    if len(text) <= chunk_chars:
+        return [text]
+    step = max(1, chunk_chars - overlap_chars)
+    chunks = []
+    start = 0
+    while start < len(text):
+        chunks.append(text[start:start + chunk_chars])
+        if start + chunk_chars >= len(text):
+            break
+        start += step
+    return chunks
+
+
+def _chunk_vector_id(node_id: str, index: int, count: int) -> str:
+    return node_id if count == 1 else f"{node_id}#{index:04d}"
+
+
+def _current_price_per_million(config: Config | None) -> float | None:
+    provider, model, _, _ = _resolve_embedding_config(config)
+    return EMBEDDING_PRICE_PER_MILLION.get((provider, model))
+
+
+def _ensure_vector_meta_table(store: Store) -> None:
+    store.conn.execute("""
+        CREATE TABLE IF NOT EXISTS node_vector_meta (
+            vector_id TEXT PRIMARY KEY,
+            node_id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL DEFAULT 0,
+            chunk_count INTEGER NOT NULL DEFAULT 1,
+            text_hash TEXT NOT NULL DEFAULT '',
+            fingerprint TEXT NOT NULL DEFAULT '',
+            strategy TEXT NOT NULL DEFAULT 'single',
+            token_estimate INTEGER NOT NULL DEFAULT 0,
+            text_preview TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    store.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_vector_meta_node ON node_vector_meta(node_id)"
+    )
+    store.conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_node_vector_meta_fingerprint "
+        "ON node_vector_meta(fingerprint)"
+    )
+
+
+def ensure_vec_table(store: Store) -> bool:
+    """Create the vector table if sqlite-vec is available.
+
+    Handles provider/model/strategy changes by recreating the table.
+    """
+    if not _check_vec():
+        return False
+
+    dim = _get_embedding_dim(store.config)
+    fingerprint = embedding_fingerprint(store.config)
+
+    if getattr(store, "read_only", False):
+        # Search of a secondary graph must never create/rebuild vector state.
+        # Existing compatible vectors remain available for semantic recall.
+        try:
+            import sqlite_vec
+            store.conn.enable_load_extension(True)
+            sqlite_vec.load(store.conn)
+            store.conn.enable_load_extension(False)
+            table = store.conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_vectors'").fetchone()
+            if table is None:
+                return False
+            row = store.conn.execute(
+                "SELECT value FROM vec_meta WHERE key='embedding_fingerprint'").fetchone()
+            return row is not None and row["value"] == fingerprint
+        except Exception:
+            return False
+
+    try:
+        import sqlite_vec
+        store.conn.enable_load_extension(True)
+        sqlite_vec.load(store.conn)
+        store.conn.enable_load_extension(False)
+
+        # Check if dimension changed (provider switch)
+        store.conn.execute(
+            "CREATE TABLE IF NOT EXISTS vec_meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        row = store.conn.execute(
+            "SELECT value FROM vec_meta WHERE key = 'embedding_dim'"
+        ).fetchone()
+        stored_dim = int(row[0]) if row else None
+        fp_row = store.conn.execute(
+            "SELECT value FROM vec_meta WHERE key = 'embedding_fingerprint'"
+        ).fetchone()
+        stored_fingerprint = fp_row[0] if fp_row else None
+        table_exists = store.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_vectors'"
+        ).fetchone() is not None
+
+        if ((stored_dim and stored_dim != dim)
+                or (table_exists and stored_fingerprint != fingerprint)):
+            reason = f"dimension changed ({stored_dim} -> {dim})"
+            if table_exists and stored_fingerprint != fingerprint:
+                reason = "embedding provider/model/strategy changed"
+            print(f"{reason}. Recreating vector table.", file=sys.stderr)
+            store.conn.execute("DROP TABLE IF EXISTS node_vectors")
+            store.conn.execute("DROP TABLE IF EXISTS node_vector_meta")
+
+        store.conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS node_vectors USING vec0(
+                node_id TEXT PRIMARY KEY,
+                embedding float[{dim}]
+            )
+        """)
+        _ensure_vector_meta_table(store)
+        store.conn.execute(
+            "INSERT OR REPLACE INTO vec_meta (key, value) VALUES ('embedding_dim', ?)",
+            (str(dim),),
+        )
+        store.conn.execute(
+            "INSERT OR REPLACE INTO vec_meta (key, value) "
+            "VALUES ('embedding_fingerprint', ?)",
+            (fingerprint,),
+        )
+        store.conn.commit()
+        return True
+    except Exception as e:
+        print(f"Warning: Could not initialize vector table: {e}", file=sys.stderr)
+        return False
+
+
+def _embed_document_chunks(
+    text: str,
+    config: Config | None,
+    *,
+    embed_one: _EmbedOne,
+) -> list[dict] | None:
+    """Embed document text using an explicitly selected provider-call boundary."""
+    if not text:
+        return []
+    strategy = embedding_strategy(config)
+    text_hash = _hash_text(text)
+    if strategy != "contextual":
+        embedding = embed_one(text, config, input_type="document")
+        if embedding is None:
+            return None
+        return [{
+            "index": 0,
+            "text": text,
+            "embedding": embedding,
+            "text_hash": text_hash,
+            "token_estimate": _estimate_tokens(text),
+        }]
+
+    provider, model, dims, api_key_env = _resolve_embedding_config(config)
+    if provider != "voyage" or not _is_voyage_context_model(model):
+        embedding = embed_one(text, config, input_type="document")
+        if embedding is None:
+            return None
+        return [{
+            "index": 0,
+            "text": text,
+            "embedding": embedding,
+            "text_hash": text_hash,
+            "token_estimate": _estimate_tokens(text),
+        }]
+
+    opts = _embedding_options(config)
+    chunks = _chunk_text(
+        text,
+        chunk_chars=opts["chunk_chars"],
+        overlap_chars=opts["chunk_overlap_chars"],
+    )
+    records: list[dict] = []
+    for offset in range(0, len(chunks), opts["max_group_chunks"]):
+        group = chunks[offset:offset + opts["max_group_chunks"]]
+        embeddings = _embed_voyage_context_chunks(
+            group, model, dims, api_key_env, input_type="document"
+        )
+        if embeddings is None or len(embeddings) != len(group):
+            return None
+        for i, (chunk_text, embedding) in enumerate(zip(group, embeddings)):
+            records.append({
+                "index": offset + i,
+                "text": chunk_text,
+                "embedding": embedding,
+                "text_hash": text_hash,
+                "token_estimate": _estimate_tokens(chunk_text),
+            })
+    return records
+
+
+def embed_document_chunks(text: str, config: Config | None = None) -> list[dict] | None:
+    """Embed document text and return chunk records ready for storage."""
+    try:
+        return _embed_document_chunks(text, config, embed_one=embed_text)
+    except _EmbeddingProviderError:
+        return None
+
+
+def _upsert_embedding_outcome(store: Store, node_id: str, text: str) -> _EmbeddingOutcome:
+    """Compute embeddings and retain the reason a queue item could not run."""
+    if not ensure_vec_table(store):
+        return _EmbeddingOutcome(False, kind="backend_unavailable",
+                                 message="Vector backend unavailable")
+
+    try:
+        chunks = _embed_document_chunks(text, store.config, embed_one=_embed_text_or_raise)
+    except _EmbeddingProviderError as e:
+        return _EmbeddingOutcome(False, terminal=e.kind == "input_too_large",
+                                 kind=e.kind, http_status=e.http_status,
+                                 message=safe_error(e))
+    if not chunks:
+        return _EmbeddingOutcome(False, kind="embedding_unavailable",
+                                 message="Embedding provider returned no vector")
+
+    try:
+        fingerprint = embedding_fingerprint(store.config)
+        strategy = embedding_strategy(store.config)
+        now = _now_iso()
+        count = len(chunks)
+        delete_embedding(store, node_id, clear_quarantine=False)
+        _ensure_vector_meta_table(store)
+        for chunk in chunks:
+            index = int(chunk["index"])
+            vector_id = _chunk_vector_id(node_id, index, count)
+            store.conn.execute(
+                "INSERT OR REPLACE INTO node_vectors (node_id, embedding) VALUES (?, ?)",
+                (vector_id, _serialize_vec(chunk["embedding"])),
+            )
+            store.conn.execute(
+                """INSERT OR REPLACE INTO node_vector_meta
+                   (vector_id, node_id, chunk_index, chunk_count, text_hash,
+                    fingerprint, strategy, token_estimate, text_preview, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    vector_id, node_id, index, count, chunk.get("text_hash") or "",
+                    fingerprint, strategy, int(chunk.get("token_estimate") or 0),
+                    (chunk.get("text") or "")[:240], now,
+                ),
+            )
+        store.conn.commit()
+        _clear_embedding_quarantine(store, node_id)
+        return _EmbeddingOutcome(True)
+    except Exception as e:
+        return _EmbeddingOutcome(False, kind="storage_error", message=safe_error(e))
+
+
+def upsert_embedding(store: Store, node_id: str, text: str) -> bool:
+    """Compute and store embeddings for a node (legacy boolean surface)."""
+    return _upsert_embedding_outcome(store, node_id, text).ok
+
+
+def _load_embedding_queue(store: Store) -> list[str]:
+    try:
+        value = json.loads(store.get_meta(EMBED_QUEUE_META) or "[]")
+        return value if isinstance(value, list) else []
+    except Exception:
+        return []
+
+
+def _load_embedding_quarantine(store: Store) -> dict[str, _EmbeddingQuarantineRecord]:
+    try:
+        value: Any = json.loads(store.get_meta(EMBED_QUARANTINE_META) or "{}")
+        if not isinstance(value, dict) or value.get("version") != EMBED_QUARANTINE_VERSION:
+            return {}
+        raw_items = value.get("items")
+        if not isinstance(raw_items, dict):
+            return {}
+        # Validate one record at a time: one hand-edited/corrupt entry must
+        # never prevent the remainder of the drain from making progress.
+        items: dict[str, _EmbeddingQuarantineRecord] = {}
+        for node_id, record in raw_items.items():
+            if not isinstance(node_id, str) or not isinstance(record, dict):
+                continue
+            try:
+                items[node_id] = _EmbeddingQuarantineRecord.model_validate(record)
+            except Exception:
+                # Retain a safe record instead of making one corrupt field
+                # poison the whole queue.
+                items[node_id] = _EmbeddingQuarantineRecord()
+        return items
+    except Exception:
+        return {}
+
+
+def _write_embedding_meta(
+    store: Store,
+    queue: list[str],
+    quarantine: dict[str, _EmbeddingQuarantineRecord],
+    *,
+    commit: bool,
+) -> None:
+    """Atomically persist the legacy queue and versioned quarantine metadata."""
+    queue_json = redact_serialized(json.dumps(queue))
+    quarantine_json = redact_serialized(json.dumps({
+        "version": EMBED_QUARANTINE_VERSION,
+        "items": {node_id: record.model_dump() for node_id, record in quarantine.items()},
+    }))
+    if not commit:
+        # The task service owns the surrounding node + receipt transaction.
+        store.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (EMBED_QUEUE_META, queue_json))
+        store.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (EMBED_QUARANTINE_META, quarantine_json))
+        return
+    try:
+        store.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (EMBED_QUEUE_META, queue_json))
+        store.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (EMBED_QUARANTINE_META, quarantine_json))
+        store.conn.commit()
+    except BaseException:
+        store.conn.rollback()
+        raise
+
+
+def _write_embedding_quarantine(
+    store: Store, quarantine: dict[str, _EmbeddingQuarantineRecord], *, commit: bool
+) -> None:
+    """Update quarantine without rewriting a concurrently changed queue."""
+    value = redact_serialized(json.dumps({
+        "version": EMBED_QUARANTINE_VERSION,
+        "items": {node_id: record.model_dump() for node_id, record in quarantine.items()},
+    }))
+    store.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)", (EMBED_QUARANTINE_META, value))
+    if commit:
+        store.conn.commit()
+
+
+def _read_node_for_embedding(store: Store, node_id: str) -> dict | None:
+    """Read queue work without touching last_accessed or committing caller work."""
+    row = store.conn.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+    return store._row_to_dict(row) if row else None
+
+
+def _node_matches_embedding_text(store: Store, node_id: str, text_hash: str) -> bool:
+    node = _read_node_for_embedding(store, node_id)
+    if not text_hash:
+        return not node or node.get("status") == "superseded" or not _embedding_text_for_node(node)
+    return bool(node and node.get("status") != "superseded"
+                and _embedding_text_for_node(node)
+                and _hash_text(_embedding_text_for_node(node)) == text_hash)
+
+
+def _persist_drain_delta(
+    store: Store,
+    remaining: list[str],
+    completed: dict[str, str],
+    terminal: dict[str, _EmbeddingQuarantineRecord],
+) -> tuple[list[str], dict[str, _EmbeddingQuarantineRecord]]:
+    """Merge a completed drain into the latest queue state under a write lock.
+
+    Provider calls run outside the lock. At commit, re-check each processed
+    node so an edit or deletion that raced the drain is never overwritten.
+    """
+    conn = store.conn
+    if conn.in_transaction:
+        conn.rollback()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        queue = _load_embedding_queue(store)
+        quarantine = _load_embedding_quarantine(store)
+        unchanged = {
+            node_id for node_id, text_hash in completed.items()
+            if _node_matches_embedding_text(store, node_id, text_hash)
+        }
+        queue = [node_id for node_id in queue if node_id not in unchanged]
+        for node_id in remaining:
+            if node_id not in queue:
+                queue.append(node_id)
+        for node_id in unchanged:
+            record = terminal.get(node_id)
+            if record:
+                quarantine[node_id] = record
+            else:
+                quarantine.pop(node_id, None)
+        _write_embedding_meta(store, queue, quarantine, commit=True)
+        return queue, quarantine
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _quarantine_matches(
+    record: _EmbeddingQuarantineRecord,
+    *,
+    text_hash: str,
+    fingerprint: str,
+) -> bool:
+    return record.text_hash == text_hash and record.fingerprint == fingerprint
+
+
+def _clear_embedding_quarantine(store: Store, node_id: str) -> None:
+    """Retire a terminal-failure claim once its node is resolved or removed."""
+    quarantine = _load_embedding_quarantine(store)
+    if node_id in quarantine:
+        quarantine.pop(node_id)
+        _write_embedding_quarantine(store, quarantine, commit=True)
+
+
+def enqueue_embedding(store: Store, node_id: str, *, max_queue: int = 100000,
+                      commit: bool = True) -> bool:
+    """Queue a node for (re)embedding by the daemon. Cheap: one small SQLite
+    write, no model load, no network — safe on the add/edit/supersede hot path.
+
+    Deferring keeps a slow embedding provider (a remote API can stall up to its
+    HTTP timeout per call) off the agent's critical path. The daemon drains the
+    queue in cron via ``drain_embedding_queue``. Deduped by node_id; FIFO.
+    """
+    if not node_id:
+        return False
+    queue = _load_embedding_queue(store)
+    quarantine = _load_embedding_quarantine(store)
+    record = quarantine.get(node_id)
+    if record:
+        node = _read_node_for_embedding(store, node_id)
+        text = _embedding_text_for_node(node) if node else ""
+        if not text or not _quarantine_matches(
+            record,
+            text_hash=_hash_text(text),
+            fingerprint=embedding_fingerprint(store.config),
+        ):
+            # The record describes a previous node/text/config triple, not the
+            # node id forever. A changed edit is actionable again.
+            quarantine.pop(node_id)
+    # Dedup and move to the tail so the newest edit wins ordering.
+    queue = [n for n in queue if n != node_id]
+    queue.append(node_id)
+    try:
+        _write_embedding_meta(store, queue[-max_queue:], quarantine, commit=commit)
+        return True
+    except Exception:
+        return False
+
+
+def enqueue_embeddings(store: Store, node_ids: list[str], *, max_queue: int = 100000) -> int:
+    """Queue many node IDs for re-embedding, deduping and preserving order, in one
+    queue write: queueing node by node rewrites the whole queue each time, which
+    grows quadratically when thousands of nodes are added at once."""
+    ids = [n for n in dict.fromkeys(node_ids) if n]
+    if not ids:
+        return 0
+    queue = _load_embedding_queue(store)
+    quarantine = _load_embedding_quarantine(store)
+    fingerprint = None
+    for node_id in ids:
+        record = quarantine.get(node_id)
+        if record:
+            node = _read_node_for_embedding(store, node_id)
+            text = _embedding_text_for_node(node) if node else ""
+            fingerprint = fingerprint or embedding_fingerprint(store.config)
+            if not text or not _quarantine_matches(record, text_hash=_hash_text(text), fingerprint=fingerprint):
+                # As in enqueue_embedding: a record for an earlier text or config is stale.
+                quarantine.pop(node_id)
+    moved = set(ids)
+    # As enqueue_embedding: each queued id moves to the tail, the newest edit last.
+    queue = [n for n in queue if n not in moved] + ids
+    try:
+        _write_embedding_meta(store, queue[-max_queue:], quarantine, commit=True)
+        return len(ids)
+    except Exception:
+        return 0
+
+
+def _embedding_queue_len(store: Store) -> int:
+    return len(_load_embedding_queue(store))
+
+
+def _single_input_token_limit(config: Config | None) -> int | None:
+    """Return a preflightable limit only for unchunked provider inputs."""
+    if embedding_strategy(config) == "contextual":
+        return None
+    provider, model, _, _ = _resolve_embedding_config(config)
+    return SINGLE_INPUT_TOKEN_LIMITS.get((provider, model))
+
+
+def embedding_queue_diagnosis(
+    store: Store, config: Config | None = None
+) -> _EmbeddingQueueDiagnosis:
+    """Describe queued inputs known to exceed a configured single-input limit.
+
+    The estimate is intentionally only used as a conservative doctor signal.
+    Providers and models without an explicit local limit are left to the drain,
+    which retains the provider's structured terminal failure in quarantine.
+    """
+    effective_config = config or store.config
+    token_limit = _single_input_token_limit(effective_config)
+    queue = _load_embedding_queue(store)
+    provider, model, _, _ = _resolve_embedding_config(effective_config)
+    oversized: list[_OversizedQueueInput] = []
+    if token_limit is not None:
+        for node_id in dict.fromkeys(node_id for node_id in queue if node_id):
+            node = _read_node_for_embedding(store, node_id)
+            if not node or node.get("status") == "superseded":
+                continue
+            text = _embedding_text_for_node(node)
+            token_estimate = _estimate_tokens(text)
+            if text and token_estimate > token_limit:
+                oversized.append({
+                    "node_id": node_id,
+                    "text_hash": _hash_text(text),
+                    "token_estimate": token_estimate,
+                })
+    return {
+        "queue_pending": len(queue),
+        "provider": provider,
+        "model": model,
+        "single_input_token_limit": token_limit,
+        "oversized": oversized,
+    }
+
+
+def quarantine_oversized_queue_items(
+    store: Store, config: Config | None = None
+) -> _EmbeddingQueueRemediation:
+    """Quarantine locally-known oversized queue items without a provider call.
+
+    This is doctor remediation for an input that cannot succeed unchanged.  It
+    has the same triple identity and lifecycle as a provider-classified record,
+    so an edit or embedding-config change makes it actionable again.
+    """
+    effective_config = config or store.config
+    diagnosis = embedding_queue_diagnosis(store, effective_config)
+    token_limit = diagnosis["single_input_token_limit"]
+    if token_limit is None or not diagnosis["oversized"]:
+        return _EmbeddingQueueRemediation(**diagnosis, quarantined_now=0)
+
+    queue = _load_embedding_queue(store)
+    quarantine = _load_embedding_quarantine(store)
+    fingerprint = embedding_fingerprint(effective_config)
+    provider = diagnosis["provider"]
+    model = diagnosis["model"]
+    completed: dict[str, str] = {}
+    terminal: dict[str, _EmbeddingQuarantineRecord] = {}
+    oversize_by_id = {item["node_id"]: item for item in diagnosis["oversized"]}
+    quarantined_now = 0
+    for node_id, item in oversize_by_id.items():
+        text_hash = item["text_hash"]
+        existing = quarantine.get(node_id)
+        if existing and _quarantine_matches(
+            existing, text_hash=text_hash, fingerprint=fingerprint
+        ):
+            terminal[node_id] = existing
+        else:
+            now = _now_iso()
+            terminal[node_id] = _EmbeddingQuarantineRecord(
+                kind="input_too_large",
+                message=(f"estimated {item['token_estimate']} tokens exceeds configured "
+                         f"{token_limit}-token input limit"),
+                text_hash=text_hash,
+                fingerprint=fingerprint,
+                provider=provider,
+                model=model,
+                first_seen_at=now,
+                last_seen_at=now,
+                attempts=0,
+            )
+            quarantined_now += 1
+        completed[node_id] = text_hash
+
+    remaining = [node_id for node_id in queue if node_id not in completed]
+    _persist_drain_delta(store, remaining, completed, terminal)
+    return _EmbeddingQueueRemediation(**diagnosis, quarantined_now=quarantined_now)
+
+
+def drain_embedding_queue(store: Store, config: Config | None = None, *,
+                          max_jobs: int | None = None,
+                          time_budget: float | None = None,
+                          report_coverage: bool = True) -> dict:
+    """Embed queued nodes. This is where the (possibly networked) embedding cost
+    lives — runs in cron, off the agent's path. Idempotent per node.
+
+    Each node is re-fetched fresh so the embedding reflects its current text.
+    Bounded to ``max_jobs`` attempts AND ``time_budget`` wall-clock seconds per
+    drain; unattempted nodes and transient failures are carried to the next cron
+    (failures re-queued at the tail so a persistently failing node can't starve
+    newer ones). The time budget keeps a slow/stalling provider from consuming
+    the whole cron interval — each queued node can cost multiple HTTP calls at
+    up to 30s apiece, so a large backlog against a degraded provider would
+    otherwise run for hours.
+    """
+    opts = _embedding_options(config or store.config)
+    if max_jobs is None:
+        max_jobs = opts["reindex_max_jobs"]
+    if time_budget is None:
+        time_budget = opts["drain_time_budget"]
+    max_jobs = int(max_jobs)
+    time_budget = float(time_budget)
+    queue = _load_embedding_queue(store)
+    quarantine = _load_embedding_quarantine(store)
+    if not queue:
+        return {"status": "empty", "embedded": 0, "pending": 0,
+                "quarantined": len(quarantine), "drain_complete": True,
+                "coverage_complete": (embedding_status(store)["coverage_complete"]
+                                      if report_coverage else None)}
+    if not is_available():
+        # Backend not installed/usable; leave the (bounded) queue intact in case
+        # it becomes available later.
+        return {"status": "unavailable", "embedded": 0, "pending": len(queue),
+                "quarantined": len(quarantine), "drain_complete": False,
+                "coverage_complete": False}
+
+    # De-dup preserving order; drop falsy ids.
+    deduped = list(dict.fromkeys(n for n in queue if n))
+    remaining: list[str] = []
+    completed: dict[str, str] = {}
+    terminal: dict[str, _EmbeddingQuarantineRecord] = {}
+    embedded = 0
+    quarantined = 0
+    attempts = 0
+    deadline = time.monotonic() + time_budget
+    fingerprint = embedding_fingerprint(config or store.config)
+    provider, model, _, _ = _resolve_embedding_config(config or store.config)
+    for i, node_id in enumerate(deduped):
+        if attempts >= max_jobs or time.monotonic() >= deadline:
+            remaining.extend(deduped[i:])  # carry the rest to the next cron
+            break
+        node = _read_node_for_embedding(store, node_id)
+        if not node or node.get("status") == "superseded":
+            completed[node_id] = ""
+            continue  # node is gone — drop from the queue
+        text = _embedding_text_for_node(node)
+        if not text:
+            completed[node_id] = ""
+            continue  # nothing to embed — drop
+        text_hash = _hash_text(text)
+        existing = quarantine.get(node_id)
+        if existing and _quarantine_matches(
+            existing, text_hash=text_hash, fingerprint=fingerprint
+        ):
+            # The exact rejected input/config pair is already diagnosed. It is
+            # not actionable work and must not incur another provider call.
+            completed[node_id] = text_hash
+            terminal[node_id] = existing
+            continue
+        attempts += 1
+        # The queue boundary owns classification: expected provider failures are
+        # returned as outcomes, while a genuinely unexpected failure stays
+        # retryable.  Do not use exceptions as an alternate terminal channel.
+        try:
+            outcome = _upsert_embedding_outcome(store, node_id, text)
+        except Exception:
+            outcome = _EmbeddingOutcome(False, kind="unexpected_error")
+        if outcome.ok:
+            embedded += 1
+            quarantine.pop(node_id, None)
+            completed[node_id] = text_hash
+        elif outcome.terminal:
+            now = _now_iso()
+            quarantine[node_id] = _EmbeddingQuarantineRecord(
+                kind=outcome.kind or "terminal_failure",
+                http_status=outcome.http_status,
+                message=safe_error(Exception(outcome.message or "Embedding failed")),
+                text_hash=text_hash,
+                fingerprint=fingerprint,
+                provider=provider,
+                model=model,
+                first_seen_at=now,
+                last_seen_at=now,
+                attempts=1,
+            )
+            terminal[node_id] = quarantine[node_id]
+            completed[node_id] = text_hash
+            quarantined += 1
+        else:
+            remaining.append(node_id)  # transient (e.g. provider down) — retry
+    try:
+        remaining, quarantine = _persist_drain_delta(store, remaining, completed, terminal)
+    except Exception:
+        # Do not report a drained/quarantined result unless the queue state is
+        # durable. The pre-drain metadata is still authoritative after rollback.
+        store.conn.rollback()
+        return {"status": "persistence_error", "embedded": embedded,
+                "pending": len(queue), "quarantined": len(_load_embedding_quarantine(store)),
+                "quarantined_this_drain": 0, "drain_complete": False,
+                "coverage_complete": False}
+    # Missing/superseded nodes are deliberately dropped too, so an empty
+    # actionable queue is complete even when no provider attempt was needed.
+    drain_complete = not remaining
+    return {"status": "ok", "embedded": embedded, "pending": len(remaining),
+            "quarantined": len(quarantine), "quarantined_this_drain": quarantined,
+            "drain_complete": drain_complete,
+            "coverage_complete": (embedding_status(store)["coverage_complete"]
+                                  if report_coverage and drain_complete else
+                                  None if not report_coverage else False)}
+
+
+def _node_embedding_fresh(store: Store, node: dict, fingerprint: str) -> bool:
+    text = _embedding_text_for_node(node)
+    if not text:
+        return True
+    text_hash = _hash_text(text)
+    try:
+        rows = store.conn.execute(
+            """SELECT text_hash, fingerprint
+               FROM node_vector_meta
+               WHERE node_id = ?""",
+            (node["id"],),
+        ).fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        return False
+    return all(row["text_hash"] == text_hash and row["fingerprint"] == fingerprint
+               for row in rows)
+
+
+def _normalize_project_path(path: str | None) -> str | None:
+    if not path:
+        return None
+    p = Path(path).expanduser()
+    if p.name == "config" and p.parent.name == ".kin":
+        p = p.parent.parent
+    elif p.name == ".kin":
+        p = p.parent
+    try:
+        return str(p.resolve())
+    except OSError:
+        return str(p)
+
+
+def select_reindex_nodes(
+    store: Store,
+    *,
+    tags: list[str] | None = None,
+    node_type: str | None = None,
+    status: str | None = None,
+    since: str | None = None,
+    project_path: str | None = None,
+    stale: bool = False,
+    limit: int | None = None,
+) -> list[dict]:
+    """Select nodes for embedding maintenance using operator-friendly filters."""
+    q = "SELECT * FROM nodes WHERE status != 'superseded'"
+    params: list = []
+    if status:
+        q += " AND status = ?"
+        params.append(status)
+    if node_type:
+        q += " AND type = ?"
+        params.append(node_type)
+    if since:
+        q += " AND updated_at >= ?"
+        params.append(since)
+    if tags:
+        for tag in tags:
+            q += " AND domains LIKE ?"
+            params.append(f'%"{tag}"%')
+    project_prefix = _normalize_project_path(project_path)
+    if project_prefix:
+        q += " AND (prov_source LIKE ? OR extra LIKE ?)"
+        params.extend([f"{project_prefix}%", f"%{project_prefix}%"])
+    q += " ORDER BY weight DESC, updated_at DESC"
+    if not stale:
+        if limit:
+            q += " LIMIT ?"
+            params.append(limit)
+        return [store._row_to_dict(row) for row in store.conn.execute(q, params)]
+
+    # Staleness is judged per node, so the limit applies to stale nodes: a
+    # limit taken first re-selected the same fresh top rows on every pass and
+    # nothing below them was ever re-embedded. Ranked ids once, rows in pages.
+    fingerprint = embedding_fingerprint(store.config)
+    ids = [row[0] for row in store.conn.execute(
+        q.replace("SELECT *", "SELECT id", 1), params)]
+    nodes: list[dict] = []
+    page = 500
+    for first in range(0, len(ids), page):
+        chunk = ids[first:first + page]
+        placeholders = ",".join("?" for _ in chunk)
+        by_id = {row["id"]: row for row in store.conn.execute(
+            f"SELECT * FROM nodes WHERE id IN ({placeholders})", chunk)}
+        for node_id in chunk:
+            row = by_id.get(node_id)
+            if row is None:
+                continue
+            node = store._row_to_dict(row)
+            if _node_embedding_fresh(store, node, fingerprint):
+                continue
+            nodes.append(node)
+            if limit and len(nodes) >= limit:
+                return nodes
+    return nodes
+
+
+def estimate_reindex_cost(nodes: list[dict], config: Config | None = None) -> dict:
+    """Estimate text volume, token volume, and known provider cost."""
+    strategy = embedding_strategy(config)
+    opts = _embedding_options(config)
+    text_bytes = 0
+    token_estimate = 0
+    chunk_count = 0
+    for node in nodes:
+        text = _embedding_text_for_node(node)
+        text_bytes += len(text.encode("utf-8"))
+        if not text:
+            continue
+        if strategy == "contextual":
+            chunks = _chunk_text(
+                text,
+                chunk_chars=opts["chunk_chars"],
+                overlap_chars=opts["chunk_overlap_chars"],
+            )
+            chunk_count += len(chunks)
+            token_estimate += sum(_estimate_tokens(chunk) for chunk in chunks)
+        else:
+            chunk_count += 1
+            token_estimate += _estimate_tokens(text)
+    price = _current_price_per_million(config)
+    return {
+        "nodes": len(nodes),
+        "chunks": chunk_count,
+        "text_bytes": text_bytes,
+        "estimated_tokens": token_estimate,
+        "estimated_cost_usd": (token_estimate / 1_000_000 * price
+                               if price is not None else None),
+        "price_per_million_tokens": price,
+        "strategy": strategy,
+        "fingerprint": embedding_fingerprint(config),
+    }
+
+
+def plan_embedding_reindex(store: Store, **filters) -> dict:
+    nodes = select_reindex_nodes(store, **filters)
+    plan = estimate_reindex_cost(nodes, store.config)
+    plan["queue_pending"] = _embedding_queue_len(store)
+    return plan
+
+
+def enqueue_reindex(store: Store, **filters) -> dict:
+    max_queue = int(filters.pop("max_queue", 0) or _embedding_options(store.config)["reindex_max_queue"])
+    nodes = select_reindex_nodes(store, **filters)
+    added = enqueue_embeddings(store, [node["id"] for node in nodes], max_queue=max_queue)
+    plan = estimate_reindex_cost(nodes, store.config)
+    plan["enqueued"] = added
+    plan["queue_pending"] = _embedding_queue_len(store)
+    return plan
+
+
+def reindex_now(store: Store, *, verbose: bool = False, **filters) -> dict:
+    """Synchronously reindex selected nodes."""
+    nodes = select_reindex_nodes(store, **filters)
+    plan = estimate_reindex_cost(nodes, store.config)
+    if not ensure_vec_table(store):
+        plan.update({"status": "unavailable", "embedded": 0})
+        return plan
+    embedded = 0
+    failed = 0
+    for node in nodes:
+        text = _embedding_text_for_node(node)
+        if not text:
+            continue
+        if upsert_embedding(store, node["id"], text):
+            embedded += 1
+            if verbose:
+                print(f"  Embedded: {node['title']}")
+        else:
+            failed += 1
+    plan.update({
+        "status": "ok",
+        "embedded": embedded,
+        "failed": failed,
+        "queue_pending": _embedding_queue_len(store),
+        "quarantined": len(_load_embedding_quarantine(store)),
+    })
+    return plan
+
+
+def embedding_status(store: Store, *, coverage: bool = True) -> dict:
+    """Return current embedding configuration and queue/index status.
+
+    `coverage=False` skips the per-node freshness scan (the whole graph, one
+    query per node); `coverage_complete` is then None. The cron pass needs
+    only the queue length and ran the scan two or three times per pass."""
+    provider, model, dims, api_key_env = _resolve_embedding_config(store.config)
+    quarantine = _load_embedding_quarantine(store)
+    groups: dict[tuple[str, int | None, str], int] = {}
+    for record in quarantine.values():
+        key = (record.kind, record.http_status, record.message)
+        groups[key] = groups.get(key, 0) + 1
+    status = {
+        "provider": provider,
+        "model": model,
+        "dimensions": dims,
+        "api_key_env": api_key_env,
+        "strategy": embedding_strategy(store.config),
+        "contextual_supported": contextual_embeddings_supported(store.config),
+        "fingerprint": embedding_fingerprint(store.config),
+        "queue_pending": _embedding_queue_len(store),
+        "quarantined": len(quarantine),
+        "quarantine_summary": [
+            {"kind": kind, "http_status": http_status, "message": message,
+             "count": count}
+            for (kind, http_status, message), count in sorted(groups.items())
+        ],
+        "vector_rows": None,
+        "indexed_nodes": None,
+        "coverage_complete": False,
+    }
+    status["drain_complete"] = not status["queue_pending"]
+    if not coverage:
+        status["coverage_complete"] = None
+    try:
+        status["vector_rows"] = store.conn.execute(
+            "SELECT COUNT(*) FROM node_vector_meta"
+        ).fetchone()[0]
+        status["indexed_nodes"] = store.conn.execute(
+            "SELECT COUNT(DISTINCT node_id) FROM node_vector_meta"
+        ).fetchone()[0]
+        if not coverage:
+            return status
+        eligible = [node for node in select_reindex_nodes(store) if _embedding_text_for_node(node)]
+        fingerprint = status["fingerprint"]
+        status["coverage_complete"] = (
+            not status["queue_pending"]
+            and not status["quarantined"]
+            and all(_node_embedding_fresh(store, node, fingerprint) for node in eligible)
+        )
+    except Exception:
+        status["coverage_complete"] = False if coverage else None
+    return status
+
+
+def delete_embedding(store: Store, node_id: str, *, clear_quarantine: bool = True) -> bool:
+    """Remove a node's stored embedding (best-effort).
+
+    Used when a node is deleted or superseded so vector search stops
+    surfacing its stale text. Returns True if a row was deleted; False
+    when no row existed or the vector table is unavailable.
+    """
+    deleted = 0
+    try:
+        vector_ids = [node_id]
+        try:
+            rows = store.conn.execute(
+                "SELECT vector_id FROM node_vector_meta WHERE node_id = ?",
+                (node_id,),
+            ).fetchall()
+            vector_ids.extend(row["vector_id"] for row in rows)
+        except Exception:
+            pass
+        for vector_id in dict.fromkeys(vector_ids):
+            cur = store.conn.execute(
+                "DELETE FROM node_vectors WHERE node_id = ?", (vector_id,)
+            )
+            deleted += cur.rowcount
+        try:
+            cur = store.conn.execute(
+                "DELETE FROM node_vector_meta WHERE node_id = ?", (node_id,)
+            )
+            deleted += cur.rowcount
+        except Exception:
+            pass
+        store.conn.commit()
+    except Exception:
+        pass
+    if clear_quarantine:
+        try:
+            _clear_embedding_quarantine(store, node_id)
+        except Exception:
+            pass
+    return deleted > 0
+
+
+def _vector_row_node(store: Store, vector_id: str) -> tuple[str, int | None]:
+    try:
+        row = store.conn.execute(
+            "SELECT node_id, chunk_index FROM node_vector_meta WHERE vector_id = ?",
+            (vector_id,),
+        ).fetchone()
+        if row:
+            return row["node_id"], row["chunk_index"]
+    except Exception:
+        pass
+    return vector_id, None
+
+
+def vector_search(store: Store, query: str, top_k: int = 10,
+                  min_similarity: float | None = None) -> list[dict]:
+    """Search for similar nodes using vector similarity.
+
+    `min_similarity`, when given, drops rows whose cosine similarity falls
+    below it. Without a floor this returns the top-k nearest neighbours for any
+    query however nonsensical, which is how a near-null query used to pull real
+    nodes into an agent's context — the floor is the only thing that lets the
+    graph say it knows nothing. The floor is supplied by the caller from a
+    calibration record; this function does not invent one.
+    """
+    if not ensure_vec_table(store):
+        return []
+
+    embedding = embed_text(query, store.config, input_type="query")
+    if embedding is None:
+        return []
+
+    try:
+        rows = store.conn.execute(
+            """SELECT node_id, distance
+               FROM node_vectors
+               WHERE embedding MATCH ?
+               ORDER BY distance
+               LIMIT ?""",
+            (_serialize_vec(embedding), max(top_k * 8, top_k)),
+        ).fetchall()
+
+        best: dict[str, dict] = {}
+        for row in rows:
+            vector_id = row[0]
+            node_id, chunk_index = _vector_row_node(store, vector_id)
+            distance = row[1]
+            existing = best.get(node_id)
+            if existing is None or distance < existing["distance"]:
+                best[node_id] = {
+                    "distance": distance,
+                    "chunk_index": chunk_index,
+                    "vector_id": vector_id,
+                }
+
+        from .grounding import similarity_from_distance
+
+        results = []
+        for node_id, match in sorted(best.items(), key=lambda item: item[1]["distance"]):
+            similarity = similarity_from_distance(match["distance"])
+            if min_similarity is not None and similarity < min_similarity:
+                # Rows arrive best-first, so the first row under the floor
+                # means every remaining row is too.
+                break
+            node = store.get_node(node_id)
+            # Skip superseded nodes — their embeddings are deleted on
+            # supersede now, but rows from older DBs may linger.
+            if node and node.get("status") != "superseded":
+                node["vec_distance"] = match["distance"]
+                node["vec_similarity"] = similarity
+                if match["chunk_index"] is not None:
+                    node["vec_chunk_index"] = match["chunk_index"]
+                results.append(node)
+                if len(results) >= top_k:
+                    break
+        return results
+    except Exception:
+        return []
+
+
+def _serialize_vec(embedding: list[float]) -> bytes:
+    """Serialize a float list to bytes for sqlite-vec."""
+    import struct
+    return struct.pack(f"{len(embedding)}f", *embedding)
+
+
+def index_all_nodes(store: Store, verbose: bool = False) -> int:
+    """Index all active nodes for vector similarity search."""
+    if not ensure_vec_table(store):
+        provider = "unknown"
+        try:
+            provider, _, _, _ = _resolve_embedding_config(store.config)
+        except Exception:
+            pass
+        if provider == "local":
+            print("Vector search not available. Install: pip install sqlite-vec sentence-transformers",
+                  file=sys.stderr)
+        else:
+            print("Vector search not available. Install: pip install sqlite-vec",
+                  file=sys.stderr)
+        return 0
+
+    nodes = select_reindex_nodes(store, status="active")
+    count = 0
+    for node in nodes:
+        text = _embedding_text_for_node(node)
+        if upsert_embedding(store, node["id"], text):
+            count += 1
+            if verbose:
+                print(f"  Embedded: {node['title']}")
+
+    return count

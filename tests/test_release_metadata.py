@@ -1,0 +1,166 @@
+"""Release surfaces that must move together."""
+
+from __future__ import annotations
+
+import ast
+import json
+import re
+import tomllib
+from pathlib import Path
+
+import kindex
+from kindex.archive import DEFAULT_ARCHIVE_MIN_AGE_DAYS
+from kindex.cli import build_parser
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_source_distribution_explicitly_excludes_private_runtime_state():
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    excluded = config["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"]
+    assert "/.kin/local" in excluded
+    assert "/.kin/local/**" in excluded
+
+
+def test_version_is_consistent_across_release_surfaces():
+    version = kindex.__version__
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    registry = json.loads((ROOT / "server.json").read_text())
+    card = json.loads(
+        (ROOT / "docs/.well-known/mcp/server-card.json").read_text()
+    )
+    readme = (ROOT / "README.md").read_text()
+    docs = (ROOT / "docs/index.html").read_text()
+    changelog = (ROOT / "CHANGELOG.md").read_text()
+
+    assert project["version"] == version
+    assert registry["version"] == version
+    assert registry["packages"][0]["version"] == version
+    assert card["serverInfo"]["version"] == version
+    for manifest in (
+        ".claude-plugin/plugin.json",
+        "src/kindex/claude_modern/.claude-plugin/plugin.json",
+    ):
+        assert json.loads((ROOT / manifest).read_text())["version"] == version
+    launcher = (ROOT / "scripts/claude-plugin/kin-mcp").read_text()
+    assert re.findall(r"kindex\[mcp\]==([0-9.]+)", launcher) == [version]
+    assert f"version-{version}-purple" in readme
+    assert f"v{version}" in docs
+    assert re.search(rf"^## \[{re.escape(version)}\]", changelog, re.MULTILINE)
+
+
+def test_public_command_counts_match_registered_surfaces():
+    docs = (ROOT / "docs/index.html").read_text()
+    mcp_source = (ROOT / "src/kindex/mcp_server.py").read_text()
+    mcp_tree = ast.parse(mcp_source)
+    tool_names = [
+        node.name
+        for node in ast.walk(mcp_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and any(
+            (
+                isinstance(decorator, ast.Call)
+                and (
+                    isinstance(decorator.func, ast.Name)
+                    and decorator.func.id in {"_tool", "_readonly_query_tool"}
+                    or isinstance(decorator.func, ast.Attribute)
+                    and isinstance(decorator.func.value, ast.Name)
+                    and decorator.func.value.id == "mcp"
+                    and decorator.func.attr == "tool"
+                )
+            )
+            or (
+                isinstance(decorator, ast.Name)
+                and decorator.id == "_readonly_query_tool"
+            )
+            for decorator in node.decorator_list
+        )
+    ]
+    tool_count = len(tool_names)
+    card = json.loads(
+        (ROOT / "docs/.well-known/mcp/server-card.json").read_text()
+    )
+    card_tools = card["capabilities"]["tools"]
+    choices = next(
+        action.choices
+        for action in build_parser()._actions
+        if getattr(action, "choices", None)
+    )
+
+    assert f"{tool_count} MCP Tools" in docs
+    assert tool_count == 78
+    assert len(card_tools) == len(set(card_tools)), "Server card lists duplicate MCP tools"
+    assert set(card_tools) == set(tool_names)
+    assert len(choices) >= 80
+    assert "80+ CLI Commands" in docs
+
+
+def test_documented_archive_age_matches_the_runtime_default():
+    age = f"{DEFAULT_ARCHIVE_MIN_AGE_DAYS} days"
+
+    assert age in (ROOT / "README.md").read_text()
+    assert age in (ROOT / "CHANGELOG.md").read_text()
+    assert age in (ROOT / "docs/human-guide.md").read_text()
+    assert age in (ROOT / "docs/llms-full.txt").read_text()
+
+
+def test_documented_migration_snapshots_are_outside_merge_rotation():
+    for relative_path in (
+        "README.md",
+        "CHANGELOG.md",
+        "docs/human-guide.md",
+        "docs/llms-full.txt",
+    ):
+        text = (ROOT / relative_path).read_text()
+        assert "migrations/" in text
+        assert "ten-file" in text
+
+
+def _tracked_files(directory: str) -> list[Path]:
+    """The files Git tracks under `directory`; every file when ROOT is not
+    the top of its own Git checkout (an unpacked sdist, possibly inside some
+    other repository, where Git would list nothing)."""
+    import subprocess
+
+    everything = list((ROOT / directory).rglob("*"))
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=ROOT,
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+        if Path(top).resolve() != ROOT.resolve():
+            return everything
+        listed = subprocess.run(
+            ["git", "ls-files", "-z", "--", directory], cwd=ROOT,
+            capture_output=True, check=True, timeout=30,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return everything
+    return [ROOT / name for name in listed.decode().split("\0") if name]
+
+
+def test_published_pages_leave_out_internal_reviews_and_home_paths():
+    workflow = (ROOT / ".github" / "workflows" / "pages.yml").read_text()
+    assert 'rm -rf "$RUNNER_TEMP/site/reviews"' in workflow
+    assert "path: docs\n" not in workflow
+    # Examples name a made-up user; no tracked doc carries a real home path.
+    # Untracked and ignored files (a local review draft) are not published.
+    for path in _tracked_files("docs"):
+        if path.is_file() and path.suffix in {".md", ".html", ".json", ".txt"}:
+            homes = set(re.findall(r"/Users/([A-Za-z0-9._-]+)/", path.read_text(errors="replace")))
+            assert homes <= {"alice"}, (path, homes)
+
+
+def test_a_nested_unpacked_tree_is_checked_whole(tmp_path, monkeypatch):
+    """ROOT inside another repository is not that repository: every file is read."""
+    import subprocess
+    import sys
+
+    outer = tmp_path / "outer"
+    inner = outer / "vendor" / "kindex"
+    (inner / "docs").mkdir(parents=True)
+    (inner / "docs" / "page.md").write_text("x")
+    subprocess.run(["git", "init", "-q", str(outer)], check=True)
+    monkeypatch.setattr(sys.modules[__name__], "ROOT", inner)
+    assert _tracked_files("docs") == [inner / "docs" / "page.md"]

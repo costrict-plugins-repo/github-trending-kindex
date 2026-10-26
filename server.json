@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.wandercom/kindex",
+  "title": "Kindex",
+  "description": "Persistent knowledge graph and MCP server for AI workflows with git-tracked project context.",
+  "version": "0.49.0",
+  "repository": {
+    "url": "https://github.com/wandercom/kindex",
+    "source": "github"
+  },
+  "websiteUrl": "https://kindex.tools/",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "kindex",
+      "version": "0.49.0",
+      "runtimeHint": "pipx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": []
+    }
+  ]
+}

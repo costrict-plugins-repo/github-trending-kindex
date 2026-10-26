@@ -1,0 +1,267 @@
+# Kindex Full LLM Guide
+
+Kindex is the local knowledge graph that every coding agent reads and writes:
+Claude Code, Codex, Gemini CLI, Google Antigravity, OpenCode, Cursor, and other
+MCP clients. Every agent is smart inside its own silo; Kindex lets them work
+together, with continuity across sessions and restarts, handoffs between vendors,
+shared decisions and constraints, and live coordination channels. It stores
+knowledge in a local SQLite graph plus the repository's git-tracked .kin/, exposes
+it through a CLI and MCP server, and gives agents explicit operating rules for
+using that graph without waiting for the user to ask. Kinbase
+(https://kinbase.tools) is the company product above it, in development, on the
+same engine and protocol with physically separate stores.
+
+Public surfaces:
+
+- Canonical website: https://kindex.tools/
+- GitHub Pages docs build: https://wandercom.github.io/kindex/
+- Human setup guide: https://kindex.tools/human-guide.md
+- MCP agent guide: https://kindex.tools/mcp-agent-guide.md
+- MCP server card: https://kindex.tools/.well-known/mcp/server-card.json
+- Source: https://github.com/wandercom/kindex
+- PyPI: https://pypi.org/project/kindex/
+
+## Install
+
+```bash
+pip install 'kindex[mcp]'
+uv tool install 'kindex[mcp]'
+uvx --from 'kindex[mcp]' kin-mcp --help
+git clone https://github.com/wandercom/kindex && cd kindex && make install
+kin init
+```
+
+Extras:
+
+- `mcp`: installs the `kin-mcp` server.
+- `llm`: enables Anthropic-powered extraction and question answering.
+- `vectors`: enables sqlite-vec semantic similarity.
+- `reminders`: enables natural-language scheduling.
+- `all`: installs all optional features.
+
+## Agent Operating Contract
+
+Agents connected to Kindex should:
+
+1. Start or resume a session tag.
+2. Search or ask Kindex before significant work.
+3. Use durable Kindex tasks for work that must survive the current chat.
+4. Capture decisions, constraints, questions, watches, key files, and notable outputs while they are fresh.
+5. Link related concepts.
+6. End the session tag with a summary.
+
+Agents should not treat host-local task scratch as durable memory. If a repo
+tracks `.kin/`, agents should treat `.kin/config`, `.kin/index.json`, and
+`.kin/code-map.json` as shipped project state and regenerate generated JSON
+instead of hand-editing it.
+
+## Reviewed Memory and Trusted State
+
+Automatic lifecycle capture is untrusted input. `compact-hook` stages bounded
+candidate records and creates no durable nodes or edges. Inspect the exact
+payload and freshness token, then explicitly accept, reject, prune, or erase it:
+
+```bash
+kin candidate list --status pending
+kin candidate show <candidate-id>
+kin candidate accept <candidate-id> --review-token <token> \
+  --by reviewer --method source-check
+kin candidate reject <candidate-id> --by reviewer --code not_relevant
+kin candidate prune
+kin candidate erase <candidate-id>
+```
+
+Verification is typed provenance, not a title convention. Use `kin verify` to
+assert an actor, method, and optional RFC 3339 valid interval; use
+`kin invalidate` to record an exclusive end time and reason. `--trusted-only`
+search and context admit only active, explicitly verified state. Session resume
+uses that trusted admission by default and is bounded by deterministic
+character accounting, with an optional tokenizer callback for provider-token
+guarantees.
+
+## Grounded Retrieval
+
+Vector search returns nearest neighbours for any query, so without a floor a
+question the graph knows nothing about still pulls real nodes into context.
+Kindex calibrates a similarity floor against the local corpus and reports a
+verdict with every result set: `grounded`, `weak`, `ungrounded`, or
+`uncalibrated`.
+
+```bash
+kin embed calibrate          # measure the null-query distribution, record the floor
+kin embed calibrate --show   # read the current record
+```
+
+The floor is an immutable versioned record keyed by `provider:model` carrying
+the corpus it was measured against, so a floor taken at low embedding coverage
+is detected as stale rather than trusted. Config holds policy only
+(`grounding.floor_percentile`, `grounding.enforce`), never the number.
+Enforcement is opt-in: shadow mode reports the verdict while every row still
+flows, because a miscalibrated floor produces silent false negatives, which are
+worse than the visible false positives it replaces.
+
+Agents should read an `ungrounded` verdict as "the graph does not know this"
+and say so, rather than synthesising an answer from loosely adjacent rows.
+
+## Extraction Engines
+
+Extraction is an input, never an authority: engine output is staged into the
+`capture_candidates` quarantine and never writes nodes or edges directly.
+`kin extract engines` lists what is available; `kin extract eval` scores engines
+against the local corpus behind a two-part gate (grounding precision as a
+hallucination floor, title recall as the discriminator). An optional LLM-free
+deterministic engine ships behind the `kindex[talon]` extra, excluded from
+`kindex[all]` and degrading to keyword extraction when absent.
+
+## Client Setup
+
+```bash
+# Claude Code
+claude mcp add --scope user --transport stdio kindex -- kin-mcp
+kin setup-claude-md --install
+kin setup-hooks
+
+# Codex
+kin setup-codex-mcp
+kin setup-codex-hooks
+kin setup-agents-md --install --global
+
+# Gemini CLI
+kin setup-gemini-mcp
+kin setup-gemini-md --install
+
+# Google Antigravity
+kin setup-antigravity-mcp
+kin setup-antigravity-hooks
+kin setup-antigravity-md --install
+
+# OpenCode
+kin setup-opencode-mcp
+kin setup-agents-md --install --global
+
+# Cursor
+kin setup-cursor-mcp
+kin setup-cursor-rules --install
+```
+
+## Reminder Wakeups
+
+Reminders can carry shell actions, natural-language instructions, or headless
+agent wakeups:
+
+```bash
+kin setup-cron
+
+kin remind create "Continue rollout check" --at "in 10 minutes" \
+  --wake codex --session last --cwd "$PWD" \
+  --instructions "Check the rollout and fix any new failures."
+
+kin remind create "Continue OpenCode build" --at "in 10 minutes" \
+  --wake opencode --session last --cwd "$PWD" --wake-agent build \
+  --instructions "Continue the build triage."
+```
+
+Important boundary:
+
+- `remind_create` stores the reminder.
+- Due reminders fire only when `kin remind check`, `kin remind exec`,
+  `kin cron`, or an installed `kin setup-cron` schedule runs.
+- Codex wakeups run `codex exec` or `codex exec resume ...`.
+- OpenCode wakeups run `opencode run`, optionally with `--session`,
+  `--continue`, `--dir`, `--model`, and `--agent`.
+- Kindex does not reenter or interrupt an idle terminal UI unless that host
+  provides a same-thread wake API.
+
+## Core Tool Families
+
+- Search and context: `search`, `context`, `ask`, `show`, `list_nodes`, with
+  trusted-only projections on search and context.
+- Knowledge capture: `add`, `edit`, `supersede`, `learn`, `link`.
+- Capture review and trust: `candidate_list`, `candidate_show`,
+  `candidate_accept`, `candidate_reject`, `candidate_prune`, `candidate_erase`,
+  `verify`, `invalidate`.
+- Session state: `tag_start`, `tag_update`, `tag_resume`.
+- Durable work: `task_add`, `task_list`, `task_done`, `task_claim`,
+  `task_release`.
+- Coordination: `coord_start`, `coord_join`, `coord_post`, `coord_read`,
+  `coord_attach`, `coord_inject`, `coord_end`.
+- Locks and watches: `lock_acquire`, `lock_release`, `watch_add`,
+  `watch_list`, `watch_resolve`.
+- Reminders: `remind_create`, `remind_list`, `remind_snooze`,
+  `remind_done`, `remind_check`, `remind_exec`.
+- Graph maintenance: `status`, `suggest`, `graph_stats`, `graph_heal`,
+  `graph_merge`, `dream`, `changelog`, `ingest`.
+- Modes: `mode_activate`, `mode_list`, `mode_show`, `mode_create`,
+  `mode_export`, `mode_import`, `mode_seed`.
+
+## v0.36.0 Graph Lifecycle and Dream Safety
+
+- Resuming a paused session reactivates the exact project-scoped tag; completed
+  tags cannot be resumed.
+- Completed unlinked sessions become archive-eligible after 60 days during
+  `kin cron` step 8 or `kin archive run`. Active, paused, knowledge-linked, and
+  newer sessions stay in the fast store. Archive cycles report IDs present in
+  both fast and slow stores but preserve both copies for review.
+- Semantic traversal and graph-health metrics exclude session lifecycle nodes and
+  retained legacy Dream domain-co-membership edges. Stored counts remain explicit,
+  and machine-readable stats report `metrics_schema: 2`.
+- Dream, Kindex's background knowledge-consolidation pass, stages sparse
+  domain-link proposals for review instead of writing cliques. The pending queue
+  defaults to 50 per graph, and resolved pairs are not recreated. Suggestions
+  persist title-versus-node-ID identity and refuse ambiguous titles.
+- Before schema migration, Kindex creates a transaction-safe snapshot in the
+  database's dedicated XDG `snapshots/.../migrations/` directory, validates its
+  integrity and source schema, records it in database metadata and the normal
+  changelog, and refuses to migrate if a safety step fails. The owner-private
+  snapshot is outside the ten-file automated-merge rotation; concurrent v0.36+
+  processes serialize through a rollback-journal SQLite lock and recheck the
+  schema. Stop every Kindex process and move
+  the live DB's `-wal` and `-shm` sidecars aside before restoring one rather than
+  downgrading in place to v0.35.x.
+
+## Release Verification
+
+For release work, verify:
+
+```bash
+python3 -m pytest
+mcp-publisher validate server.json
+git describe --tags --exact-match HEAD
+gh release view vX.Y.Z --repo wandercom/kindex
+curl -fsSL https://pypi.org/pypi/kindex/json
+curl -fsSL https://kindex.tools/ | grep 'vX.Y.Z'
+curl -fsSL https://kindex.tools/.well-known/mcp/server-card.json | grep 'X.Y.Z'
+```
+
+Refresh registry auth before publishing if the local MCP publisher token has
+expired, then run:
+
+```bash
+mcp-publisher publish server.json
+```
+
+## v0.37.0 Supervision, Notifications, and Transfer
+
+Periodic reviews compare the user's goal with recent actions, open tasks, constraints, and validation evidence. Before scaling workers or a long run, use a small representative pilot, state the expected durable outcome, and verify actual completed/remaining counts and restart/rebuild invariance. Review providers, cadence, budget, and optional Advocate escalation come from trusted user configuration. Quiet completion, missing credentials, failure, budget exhaustion, and undelivered advice remain distinct states.
+
+Install host adapters with `kin setup-hooks --mode modern` (qualified Claude version), `kin setup-codex-hooks`, `kin setup-opencode-hooks`, `kin setup-antigravity-hooks`, or `kin setup-cursor-hooks`. Start a new host session afterward. Antigravity needs an explicit workspace. Cursor authenticated delivery and IDE activity discovery remain unverified.
+
+`python3 -m kindex.supervisor_health install` enables the independent macOS checker. Sustained issues enter a private durable inbox; native desktop alerts are enabled by default while root mail remains off. No Postfix setup is required. Read `python3 -m kindex.supervisor_health inbox --json`; acknowledge an occurrence with `python3 -m kindex.supervisor_health ack --id ALERT_ID --json`. Acknowledgment does not resolve the underlying issue. Delivery acceptance is not human reading or usefulness; explicit `feedback --project PATH --agent HOST --session ID --verdict useful|acted_on|dismissed` records that distinction. See https://kindex.tools/supervisor-health.md for configuration and qualification boundaries.
+
+Project hooks and MCP use one durable store resolver and preserve conflicting populated stores. Explicit personal/company scopes remain separate. Kinbase imports preserve signed source bytes and distinguish raw evidence from reduced snapshots; schema 13 adds provenance-limited standing. Atomic JSON/JSONL graph transfer retains lifecycle and source identity without importing local verification authority. Shared exports scrub private paths and nested contact data. Doctor verifies actual FTS postings and repairs transactionally.
+
+
+## v0.38.0 Installed-client and Offline Reviews
+
+Trusted `sim.backend` selects `api`, `antigravity`, `codex`, `claude`, or `ollama`.
+Disable periodic reviews with `sim.enabled: false`. Native clients use their
+subscription login and explicitly resume per-conversation native session IDs.
+Offline Ollama reviews require an explicit installed local model in
+`sim.ollama_model` and a loopback `sim.ollama_url`; cloud-backed entries are refused.
+No backend silently falls back to a cloud API. Native-client and Ollama reviews
+share durable `sim.max_conversation_reviews` and `sim.max_daily_reviews` attempt
+limits and low-allowance notices. API reviews retain separate dollar budgets.
+Settings and cadence can be adjusted for a running conversation using trusted
+`kin agent-config` overrides; admitted work keeps its configuration snapshot.
+The canonical MCP Registry listing is `io.github.wandercom/kindex`.
+See https://kindex.tools/supervisor-health.md for setup, controls, and boundaries.

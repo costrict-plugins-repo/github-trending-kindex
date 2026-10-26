@@ -1,0 +1,636 @@
+"""Kinbase evidence I/O; signing and governance stay in Kinbase.
+
+Raw verifies immutable local events. Reduced asks Kinbase to explain each local
+logical key, retaining the reduction receipt. Neither grants Kindex verification.
+Explicit submissions pass AI evidence through native ingestion. Native receipts
+own derivation/admission results; no separate bulk corpus admission is requested.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import sqlite3
+import subprocess
+import tempfile
+import time
+from contextlib import closing
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .privacy import redact, safe_error
+from .schema import ALL_NODE_TYPES, STANDINGS
+from .trust import parse_rfc3339
+
+_CEILINGS = {"human": "authoritative", "transcript": "prevalent",
+             "human_review": "prevalent", "human-review": "prevalent",
+             "ai_generated": "present", "agent": "present", "bot": "present",
+             "unknown": "present"}
+_EVENT_PATH = re.compile(r"[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{60}\.json\Z")
+_MAX_EVENT_BYTES = 64 * 1024
+
+
+def clamp_standing(standing: str, provenance: str) -> str:
+    if standing not in STANDINGS:
+        raise ValueError("Unsupported Kinbase standing")
+    ceiling = _CEILINGS.get(provenance, "present")
+    return STANDINGS[min(STANDINGS.index(standing), STANDINGS.index(ceiling))]
+
+
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate JSON field")
+        value[key] = item
+    return value
+
+
+def _loads(raw):
+    def invalid_constant(_):
+        raise ValueError("Non-finite JSON number")
+    return json.loads(raw, object_pairs_hook=_unique_object, parse_constant=invalid_constant)
+
+
+def _dependencies():
+    try:
+        import rfc8785
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    except ImportError as exc:
+        raise RuntimeError("Kinbase sync requires pip install 'kindex[kinbase]'") from exc
+    return rfc8785.dumps, Ed25519PublicKey
+
+
+def _timestamp(value):
+    return parse_rfc3339(value, field="Kinbase validity timestamp")
+
+
+def _validate(doc, *, unknown=False):
+    if not isinstance(doc, dict):
+        raise ValueError("Kinbase document must be an object")
+    for field in ("logical_key", "question" if unknown else "statement"):
+        if not isinstance(doc.get(field), str) or not doc[field].strip():
+            raise ValueError(f"Kinbase document requires {field}")
+    if any(char in doc["logical_key"] for char in "*%?\x00"):
+        raise ValueError("Kinbase logical key must be exact")
+    for field in ("standing", "claimed_standing"):
+        if field in doc and doc[field] not in STANDINGS:
+            raise ValueError("Unsupported Kinbase standing")
+    if not isinstance(doc.get("provenance", "unknown"), str):
+        raise ValueError("Kinbase provenance must be a string")
+    for field in ("owner_role", "owner_identity", "scope", "status", "disposition", "atom_kind"):
+        if field in doc and not isinstance(doc[field], str):
+            raise ValueError(f"Kinbase {field} must be a string")
+    for field in ("effective_from", "effective_until", "asserted_at"):
+        if doc.get(field) is not None:
+            _timestamp(doc[field])
+    if doc.get("effective_from") and doc.get("effective_until"):
+        if _timestamp(doc["effective_until"]) <= _timestamp(doc["effective_from"]):
+            raise ValueError("Kinbase validity interval is empty")
+    for field in ("evidence_refs", "governs_paths"):
+        if field in doc and (not isinstance(doc[field], list) or not all(isinstance(item, str) for item in doc[field])):
+            raise ValueError(f"Kinbase {field} must be a list of strings")
+    for field in ("anchors", "evidence_refs", "governs_paths"):
+        if field in doc and not isinstance(doc[field], list):
+            raise ValueError(f"Kinbase {field} must be a list")
+
+
+def _read_events(root):
+    canonical, public_key = _dependencies()
+    events = root / ".kin" / "events"
+    if (root / ".kin").is_symlink() or events.is_symlink():
+        raise ValueError("Refusing symlinked Kinbase event directory")
+    if not events.is_dir():
+        raise ValueError("Kinbase event directory is missing or unreadable")
+    documents, quarantine = [], []
+
+    def walk_error(error):
+        raise OSError("Kinbase event inventory is unreadable") from error
+
+    for directory, dirs, files in os.walk(events, followlinks=False, onerror=walk_error):
+        for name in list(dirs):
+            path = Path(directory) / name
+            if path.is_symlink():
+                quarantine.append({"path": str(path.relative_to(events)), "reason": "symlink directory"})
+                dirs.remove(name)
+        for name in sorted(files):
+            if not name.endswith(".json"):
+                continue
+            path = Path(directory) / name
+            relative = path.relative_to(events).as_posix()
+            try:
+                if path.is_symlink():
+                    raise ValueError("symlink event")
+                if not _EVENT_PATH.fullmatch(relative):
+                    raise ValueError("invalid content-addressed event path")
+                with path.open("rb") as stream:
+                    raw = stream.read(_MAX_EVENT_BYTES + 1)
+                if len(raw) > _MAX_EVENT_BYTES:
+                    raise ValueError("event exceeds 64 KiB")
+                doc = _loads(raw)
+                if not isinstance(doc, dict):
+                    raise ValueError("event must be an object")
+                digest = hashlib.sha256(canonical(doc)).hexdigest()
+                if digest != relative.replace("/", "")[:-5]:
+                    raise ValueError("content address mismatch")
+                schema = doc.get("schema")
+                if schema not in ("kinbase-event/1", "kinbase-unknown/1"):
+                    raise ValueError("unsupported event schema")
+                _validate(doc, unknown=schema == "kinbase-unknown/1")
+                unsigned = {key: value for key, value in doc.items() if key != "signature"}
+                message_type = b"unknown-event" if schema == "kinbase-unknown/1" else b"fact-event"
+                signed_digest = hashlib.sha256(b"kinbase-sig/1\x00" + message_type + b"\x00" + canonical(unsigned)).digest()
+                signer = bytes.fromhex(doc["signer"])
+                try:
+                    signature = bytes.fromhex(doc["signature"])
+                except ValueError:
+                    signature = base64.b64decode(doc["signature"], validate=True)
+                public_key.from_public_bytes(signer).verify(signature, signed_digest)
+                documents.append((digest, doc))
+            except OSError:
+                # Permission and transient IO failures are not authoritative deletions.
+                raise
+            except Exception as exc:
+                reason = str(exc) if isinstance(exc, ValueError) else type(exc).__name__
+                quarantine.append({"path": relative, "reason": reason or "invalid signature"})
+    return sorted(documents), quarantine
+
+
+def _identity(repo, identity):
+    return "kinbase-" + hashlib.sha256((repo + "\x00" + identity).encode()).hexdigest()
+
+
+#: The most one `kinbase explain` may take.
+EXPLAIN_TIMEOUT_S = 60
+
+
+def _reduced(root, binary, documents, budget_s=None):
+    deadline = None if budget_s is None else time.monotonic() + budget_s
+    by_event = {}
+    by_unknown = {}
+    for digest, doc in documents:
+        event_id = doc.get("event_id")
+        if event_id:
+            by_event.setdefault(event_id, []).append((digest, doc))
+        fact_id = doc.get("fact_id")
+        if doc.get("schema") == "kinbase-unknown/1" and isinstance(fact_id, str) and fact_id:
+            by_unknown.setdefault((fact_id, doc["logical_key"]), []).append((digest, doc))
+    rows = []
+    exhausted = ("Kinbase explain budget exhausted; sync not applied. "
+                 "Run `kin kinbase sync` from a shell for a full reduced sync.")
+    for key in sorted({doc["logical_key"] for _, doc in documents}):
+        # Each call may use only what is left of the budget: checking between
+        # calls still let the last one run its own full minute.
+        timeout = EXPLAIN_TIMEOUT_S
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(exhausted)
+            timeout = min(timeout, remaining)
+        try:
+            result = subprocess.run(
+                [binary, "explain", key, "--repo", str(root), "--decision",
+                 "Kindex read-only synchronization", "--json"],
+                capture_output=True, text=True, timeout=timeout, check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            if timeout < EXPLAIN_TIMEOUT_S:
+                raise RuntimeError(exhausted) from exc
+            raise RuntimeError("Kinbase explain failed; sync not applied") from exc
+        except OSError as exc:
+            raise RuntimeError("Kinbase explain failed; sync not applied") from exc
+        if result.returncode:
+            raise RuntimeError(f"Kinbase explain exited {result.returncode}; sync not applied")
+        try:
+            envelope = _loads(result.stdout)
+            if (not isinstance(envelope, dict) or envelope.get("logical_key") != key
+                    or "current" not in envelope or not isinstance(envelope.get("unknowns"), list)):
+                raise ValueError("unsupported exact-key explain response")
+            if not isinstance(envelope.get("as_of"), str):
+                raise ValueError("explain response requires snapshot as_of")
+            _timestamp(envelope["as_of"])
+            if not isinstance(envelope.get("reducer_version"), str):
+                raise ValueError("explain response requires reducer_version")
+            receipt = {k: v for k, v in envelope.items() if k not in ("current", "unknowns")}
+            current = envelope["current"]
+            if current is not None:
+                if not isinstance(current, dict) or current.get("logical_key") != key:
+                    raise ValueError("explain current fact does not match requested key")
+                matches = by_event.get(current.get("event_id"), [])
+                source = matches[0] if len(matches) == 1 else None
+                doc = {**(source[1] if source else {}), **current}
+                _validate(doc)
+                identity = source[0] if source else "reduced-fact:" + str(current.get("event_id") or current.get("fact_id") or key)
+                rows.append((identity, doc, receipt))
+            for unknown in envelope["unknowns"]:
+                if not isinstance(unknown, dict) or unknown.get("logical_key") != key:
+                    raise ValueError("explain unknown does not match requested key")
+                _validate(unknown, unknown=True)
+                identity = unknown.get("unknown_id")
+                if not isinstance(identity, str) or not identity:
+                    raise ValueError("explain unknown requires unknown_id")
+                # Kinbase's explicit DerivedUnknown uses the signed unknown's
+                # fact_id as unknown_id and omits event_id. Match only one exact
+                # verified source; ambiguous histories keep the derived identity.
+                matches = by_unknown.get((identity, key), []) if unknown.get("kind") == "explicit" else []
+                source = matches[0] if len(matches) == 1 else None
+                doc = {**(source[1] if source else {}), **unknown, "schema": "kinbase-unknown/1"}
+                _validate(doc, unknown=True)
+                rows.append((source[0] if source else "reduced-unknown:" + identity, doc, receipt))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ValueError(f"Invalid Kinbase explain response: {exc}; sync not applied") from exc
+    return rows
+
+
+def _node(repo, identity, doc, mode, receipt):
+    unknown = doc.get("schema") == "kinbase-unknown/1"
+    provenance = doc.get("provenance", "unknown")
+    standing = clamp_standing(doc.get("standing", "unruled"), provenance)
+    body = doc["question"] if unknown else doc["statement"]
+    metadata = {**doc, "repo": repo, "mode": mode, "source_identity": identity,
+                "claimed_standing": doc.get("claimed_standing", doc.get("standing", "unruled")),
+                "standing": standing, "provenance": provenance,
+                "signature_verified": True, "signature_verification_scope": "original source bytes",
+                "governance_verified": mode == "reduced"}
+    if receipt is not None:
+        metadata["reduction"] = receipt
+        metadata["signature_verification_scope"] = "Kinbase reducer admission"
+    metadata["source_document_redacted"] = redact(doc) != doc
+    disposition = doc.get("disposition", "accepted")
+    retired = disposition in ("rejected", "superseded", "proposed")
+    if unknown:
+        retired = doc.get("status") in ("closed", "abandoned", "superseded")
+    elif mode == "reduced":
+        retired = (retired or doc.get("status") != "current" or receipt.get("state") != "current"
+                   or doc.get("trust") != "trusted" or receipt.get("projection_state") == "withheld")
+    node_type = "question" if unknown else doc.get("atom_kind", "concept")
+    if node_type not in ALL_NODE_TYPES:
+        node_type = "concept"
+    # Importing external operational rules never installs them as Kindex policy.
+    # These retain atom_kind and are surfaced as labelled evidence by retrieval.
+    if node_type in ("constraint", "directive", "checkpoint", "watch"):
+        node_type = "concept"
+    audience = {"personal": "private", "company": "org", "codebase": "team"}.get(doc.get("store_kind"), "private")
+    return redact({"id": _identity(repo, identity), "type": node_type,
+                   "title": body[:160], "content": body, "aka": [doc["logical_key"]],
+                   "prov_when": doc.get("asserted_at", ""),
+                   "domains": [doc["scope"]] if doc.get("scope") else [],
+                   "status": "archived" if retired else "active", "audience": audience,
+                   "standing": standing, "prov_who": [provenance],
+                   "prov_source": "kinbase:" + repo, "extra": {"kinbase": metadata}})
+
+
+#: The most one Kinbase status may take. `status` reaches Company over the
+#: network, and it runs on the MCP event loop, so an unbounded call stalls every
+#: other tool for that client.
+#:
+#: Thirty seconds is measured, not inherited. Against a 0.36 MB store `status`
+#: takes 655-884 ms over ten runs. The cost is linear in store size, so the
+#: 5 MB that Kinbase's own deploy notes name as the point where the query shape
+#: has to be fixed lands near nine seconds, leaving roughly three times the
+#: headroom. Past that the bound is reached before the answer is: a 20 MB store
+#: extrapolates to about thirty-eight seconds and would time out. That is the
+#: query shape failing loudly rather than this bound being wrong, and the
+#: extrapolation is one measured point, not a second measurement.
+STATUS_TIMEOUT_S = 30
+SUBMIT_TIMEOUT_S = 30
+MAX_SUBMISSION_BYTES = 16 * 1024
+MAX_SUBMISSION_RECEIPT_BYTES = 64 * 1024
+
+
+def _query(argv, binary, timeout_s):
+    """Run one bounded native Kinbase command and parse its JSON.
+
+    Neither command records the asking. `explain` reduces one key and writes
+    nothing; `status` runs Kinbase's own due maintenance first, closing
+    apologies whose deadline has passed, which is a signed write the CLI
+    performs on every invocation and which no caller can suppress. It is
+    bounded by what is already overdue rather than by how often it is asked,
+    so a second call in the same minute writes nothing.
+
+    `project` is deliberately absent on the other side of exactly that line:
+    it records the query and may open an Unknown, so each call adds to the
+    queue people read, and an agent looping over it turns that queue into
+    noise.
+
+    Explicit observation submission also uses this transport for `ingest`,
+    which writes native ingestion state. Its caller reports uncertain outcomes
+    distinctly and never treats transport failure as proof that nothing wrote.
+    """
+    executable = shutil.which(str(binary))
+    if not executable:
+        raise RuntimeError("Kinbase binary unavailable; install Kinbase")
+    try:
+        result = subprocess.run([executable, *argv, "--json"],
+                                capture_output=True, text=True,
+                                stdin=subprocess.DEVNULL,
+                                timeout=timeout_s, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Kinbase {argv[0]} timed out") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Kinbase {argv[0]} failed") from exc
+    envelope = _loads(result.stdout)
+    # A refusal is a typed document on stdout, not a crash. Returning it keeps
+    # the code and remediation Kinbase wrote, which a raised exception loses.
+    if isinstance(envelope, dict) and "error" in envelope:
+        return envelope
+    if result.returncode:
+        raise RuntimeError(f"Kinbase {argv[0]} exited {result.returncode}")
+    if not isinstance(envelope, dict):
+        raise ValueError(f"unsupported Kinbase {argv[0]} response")
+    return envelope
+
+
+def read_status(repo: str | Path, *, binary="kinbase") -> dict:
+    """Certification, trusted fact count and open Unknowns for one repository.
+
+    Bounded, though `status` signs events during its due-maintenance sweep. An
+    earlier revision left this unbounded to avoid tearing that write. The trade
+    was wrong twice over. A deadline SIGKILLs the child exactly as a client quit
+    or a lost machine does, so the tear is reachable either way; and the tear is
+    a no-op rather than corruption, because Kinbase appends with
+    `INSERT OR IGNORE` against an `event_id` primary key, so the re-emitted id
+    the old rationale feared is precisely the case that insert absorbs. What the bound does remove is the
+    unrecoverable case. FastMCP runs a sync tool inline on the event loop, so an
+    unbounded call here does not hang one tool, it hangs every kindex tool for
+    that client with no cancellation path. A recoverable failure that is already
+    possible beats an unrecoverable one that is not.
+    """
+    root = Path(repo).expanduser().resolve(strict=True)
+    return _query(["status", "--repo", str(root)], binary, STATUS_TIMEOUT_S)
+
+
+def read_explain(repo: str | Path, logical_key: str, decision: str, *,
+                 binary="kinbase") -> dict:
+    """Why one logical key reads as it does, and what evidence would change it."""
+    root = Path(repo).expanduser().resolve(strict=True)
+    return _query(
+        ["explain", logical_key, "--repo", str(root), "--decision", decision],
+        binary, EXPLAIN_TIMEOUT_S)
+
+
+def _submission_paths(root: Path, artifact: Path | None = None) -> Path:
+    """Validate every generated-path ancestor before creating or reading it."""
+    directory = root / ".kin" / "local" / "kindex" / "kinbase-submissions"
+    for path in (root / ".kin", root / ".kin" / "local",
+                 root / ".kin" / "local" / "kindex", directory):
+        if path.is_symlink() or (path.exists() and not path.is_dir()):
+            raise ValueError("Refusing linked or non-directory Kinbase submission storage")
+    ignore = root / ".kin" / ".gitignore"
+    if ignore.is_symlink() or (ignore.exists() and ignore.stat().st_nlink > 1):
+        raise ValueError("Refusing linked .kin/.gitignore")
+    if artifact is not None:
+        if artifact.is_symlink() or (artifact.exists() and
+                (not artifact.is_file() or artifact.stat().st_nlink > 1)):
+            raise ValueError("Refusing linked Kinbase submission artifact")
+        if any(Path(str(artifact) + suffix).exists()
+               or Path(str(artifact) + suffix).is_symlink()
+               for suffix in ("-wal", "-shm", "-journal")):
+            raise ValueError("Refusing mutable Kinbase submission artifact with SQLite sidecars")
+    return directory
+
+
+def _observation_artifact(root: Path, text: str, node_type: str) -> Path:
+    """Install one immutable export atomically; identical retries keep its mtime."""
+    from .project_store import ensure_local_ignored, refuse_tracked_store
+
+    directory = _submission_paths(root)
+    refuse_tracked_store(root / ".kin" / "local")
+    ensure_local_ignored(root / ".kin" / "local" / "kindex")
+    directory.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({"format": "kindex-observation-v1", "node_type": node_type,
+                          "text": text}, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    digest = hashlib.sha256(payload).hexdigest()
+    artifact = directory / f"{digest}.sqlite"
+    _submission_paths(root, artifact)
+    with tempfile.TemporaryDirectory(prefix=".submission-", dir=directory) as temporary:
+        pending = Path(temporary) / "observation.sqlite"
+        with closing(sqlite3.connect(pending)) as connection:
+            with connection:
+                connection.execute(
+                    "CREATE TABLE nodes (id TEXT PRIMARY KEY, type TEXT, title TEXT, "
+                    "content TEXT, extra BLOB, created_at TEXT, prov_source TEXT, "
+                    "status TEXT, audience TEXT)")
+                connection.execute("INSERT INTO nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                   (f"agent-observation-{digest}", node_type, text[:160],
+                                    text, b"{}", None, "agent:kindex-submit", "active", "team"))
+        os.chmod(pending, 0o600)
+        expected = pending.read_bytes()
+        with pending.open("rb") as stream:
+            os.fsync(stream.fileno())
+        _submission_paths(root, artifact)
+        try:
+            # Complete bytes appear together, and a concurrent submission can
+            # never be replaced. Remove the temporary link immediately.
+            os.link(pending, artifact)
+        except FileExistsError:
+            pass
+        finally:
+            pending.unlink()
+        _submission_paths(root, artifact)
+        # Limit the read even if someone replaced the immutable artifact.
+        with artifact.open("rb") as stream:
+            if stream.read(len(expected) + 1) != expected:
+                raise ValueError("Kinbase submission artifact drift; refusing to overwrite it")
+    return artifact
+
+
+def submit_observation(repo: str | Path, text: str, node_type: str = "concept", *,
+                       binary="kinbase") -> dict:
+    """Submit explicit AI evidence via native ingestion, preserving its receipt.
+
+    The export contains exactly one supplied observation, not the local graph.
+    Kinbase owns governance, content scanning, derivation/admission, receipts and
+    any signed writes. This never requests separate bulk corpus admission or
+    authority ratification; native ingestion may itself admit derived facts.
+    Identical text/type retries reuse the same native source identity. A timeout
+    is indeterminate: the native operation may have completed before termination.
+    """
+    if node_type not in ("concept", "decision", "constraint", "question"):
+        raise ValueError("Submission node_type must be concept, decision, constraint, or question")
+    if not isinstance(text, str) or not text.strip() or "\x00" in text:
+        raise ValueError("Submission text must be nonempty text without NUL characters")
+    if len(text.encode("utf-8")) > MAX_SUBMISSION_BYTES:
+        raise ValueError("Submission text exceeds the 16 KiB limit")
+    if redact(text) != text:
+        raise ValueError("Submission contains recognized credentials; remove them before submitting")
+    root = Path(repo).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("Submission repository must be an existing directory")
+    executable = shutil.which(str(binary))
+    if not executable:
+        raise RuntimeError("Kinbase binary unavailable; install Kinbase")
+    artifact = _observation_artifact(root, text, node_type)
+    # Validate once more before handing the path to the native reader.
+    _submission_paths(root, artifact)
+    try:
+        receipt = _query(["ingest", "kindex", str(artifact), "--repo", str(root)],
+                         executable, SUBMIT_TIMEOUT_S)
+    except (RuntimeError, ValueError, OSError) as error:
+        timed_out = isinstance(error.__cause__, subprocess.TimeoutExpired)
+        return {"ok": False, "stage": "unknown", "artifact": str(artifact),
+                "bulk_admission": "not_requested", "ratification": "not_performed",
+                "error": {"code": "kinbase_submit_timeout" if timed_out else "kinbase_submit_unknown",
+                          "message": safe_error(error) + "; native ingestion may have completed. "
+                          "Retry the same text and node_type to reuse the same source identity."}}
+    receipt = redact(receipt)
+    refused = receipt.get("ok") is False or receipt.get("error") is not None
+    native_error = receipt.get("error")
+    encoded = json.dumps(receipt, ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_SUBMISSION_RECEIPT_BYTES:
+        receipt = {"omitted": True, "bytes": len(encoded),
+                   "sha256": hashlib.sha256(encoded).hexdigest(),
+                   "reason": "Native receipt exceeds the 64 KiB tool limit"}
+    result = {"ok": not refused, "stage": "refused" if refused else "submitted",
+              "artifact": str(artifact), "bulk_admission": "not_requested",
+              "ratification": "not_performed", "receipt": receipt}
+    if native_error is not None:
+        error_bytes = json.dumps(native_error, ensure_ascii=False).encode("utf-8")
+        # Ordinary native refusals retain exactly the native typed error at
+        # the standard top level, including when a large receipt is omitted.
+        # An oversized error itself is bounded, retaining its code/reason.
+        if len(error_bytes) > MAX_SUBMISSION_RECEIPT_BYTES:
+            native_error = {
+                "code": str(native_error.get("code", "kinbase_submit_refused"))[:256]
+                if isinstance(native_error, dict) else "kinbase_submit_refused",
+                "message": (str(native_error.get("message", native_error))[:4096]
+                            if isinstance(native_error, dict) else str(native_error)[:4096]),
+                "truncated": True,
+                "bytes": len(error_bytes),
+                "sha256": hashlib.sha256(error_bytes).hexdigest(),
+            }
+        result["error"] = native_error
+    return result
+
+
+def sync_kinbase(store, repo: str | Path, *, mode="auto", binary="kinbase",
+                 explain_budget_s: float | None = None) -> dict:
+    """Refresh source-scoped evidence atomically; never write signed source files.
+
+    Reduced coverage is all keys in the verified local event inventory, not the
+    complete Company corpus and not a token-budgeted project selection.
+    """
+    if mode not in ("auto", "raw", "reduced"):
+        raise ValueError("Kinbase mode must be auto, raw, or reduced")
+    root = Path(repo).expanduser().resolve(strict=True)
+    executable = shutil.which(str(binary))
+    if mode == "auto":
+        mode = "reduced" if executable else "raw"
+    if mode == "reduced" and not executable:
+        raise RuntimeError("Kinbase binary unavailable; use --mode raw or install Kinbase")
+    documents, quarantine = _read_events(root)
+    inputs = (_reduced(root, executable, documents, explain_budget_s) if mode == "reduced"
+              else [(digest, doc, None) for digest, doc in documents])
+    rows = [_node(str(root), identity, doc, mode, receipt) for identity, doc, receipt in inputs]
+    desired = {row["id"]: row for row in rows}
+    if len(desired) != len(rows):
+        raise ValueError("Kinbase reduction returned duplicate identities")
+    conn = store.conn
+    if conn.in_transaction:
+        raise ValueError("Kinbase sync requires its own transaction")
+    imported = unchanged = deactivated = 0
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        previous = {row["id"]: store._row_to_dict(row) for row in conn.execute(
+            "SELECT * FROM nodes WHERE json_valid(extra) "
+            "AND json_extract(extra, '$.kinbase.repo') = ?", (str(root),))}
+        for node_id, old in previous.items():
+            if node_id not in desired and old["status"] != "archived":
+                metadata = old["extra"]["kinbase"]
+                metadata["inactive_reason"] = "absent-or-quarantined" if mode == "raw" else "not-in-reduced-view"
+                conn.execute("UPDATE nodes SET status='archived', verified_at=NULL, verified_by=NULL, "
+                             "prov_method=NULL, updated_at=?, extra=? WHERE id=?",
+                             (now, json.dumps(old["extra"]), node_id))
+                deactivated += 1
+        for node_id, node in desired.items():
+            old = previous.get(node_id)
+            if old and all(old.get(k) == v for k, v in node.items()):
+                unchanged += 1
+                continue
+            values = {k: json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else v
+                      for k, v in node.items()}
+            values.update(updated_at=now, created_at=old["created_at"] if old else now,
+                          last_accessed=old["last_accessed"] if old else now,
+                          verified_at=None, verified_by=None, prov_method=None)
+            columns = list(values)
+            assignments = ",".join(f"{column}=excluded.{column}" for column in columns if column != "id")
+            conn.execute(f"INSERT INTO nodes ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)}) "
+                         f"ON CONFLICT(id) DO UPDATE SET {assignments}", tuple(values.values()))
+            imported += 1
+        # Rebuild only source-owned edges; Kindex assertions remain untouched.
+        edge_source = "kinbase:" + str(root)
+        conn.execute("DELETE FROM edges WHERE provenance = ?", (edge_source,))
+        facts, unknowns, evidence = {}, [], {}
+        for node in rows:
+            metadata = node["extra"]["kinbase"]
+            evidence.setdefault(metadata.get("event_id", ""), []).append(node["id"])
+            if node["status"] != "active":
+                continue
+            if node["type"] == "question":
+                unknowns.append(node)
+            else:
+                facts.setdefault(metadata["logical_key"], []).append(node["id"])
+        for node in unknowns:
+            for target in facts.get(node["extra"]["kinbase"]["logical_key"], []):
+                conn.execute("INSERT OR IGNORE INTO edges (from_id,to_id,type,weight,provenance) VALUES (?,?, 'contradicts',1,?)",
+                             (node["id"], target, edge_source))
+        for node in rows:
+            for reference in node["extra"]["kinbase"].get("evidence_refs", []):
+                for target in evidence.get(reference, []):
+                    if target != node["id"]:
+                        conn.execute("INSERT OR IGNORE INTO edges (from_id,to_id,type,weight,provenance) VALUES (?,?,'derived_from',0.5,?)",
+                                     (node["id"], target, edge_source))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return {"mode": mode, "repo": str(root), "coverage": "local-event-keys",
+            "imported": imported, "quarantined": len(quarantine), "unchanged": unchanged,
+            "deactivated": deactivated, "quarantine": redact(quarantine)}
+
+
+def attach_unknowns(store, node):
+    """Attach contested questions outside top_k so selecting a fact keeps its caveat."""
+    metadata = (node.get("extra") or {}).get("kinbase")
+    if not isinstance(metadata, dict):
+        return
+    node["kinbase_unknowns"] = []
+    rows = store.conn.execute(
+        "SELECT * FROM nodes WHERE type='question' AND status='active' "
+        "AND json_valid(extra) AND json_extract(extra,'$.kinbase.repo')=? "
+        "AND json_extract(extra,'$.kinbase.logical_key')=? AND id != ? ORDER BY id",
+        (metadata["repo"], metadata["logical_key"], node["id"]))
+    for row in rows:
+        question = store._row_to_dict(row)
+        from .store import node_expired
+        if node_expired(question):
+            continue
+        data = question["extra"]["kinbase"]
+        node["kinbase_unknowns"].append({"id": question["id"], "question": question["content"],
+            "owner_role": data.get("owner_role", ""), "owner_identity": data.get("owner_identity", ""),
+            "status": data.get("status", "open")})
+
+
+def evidence_note(node):
+    metadata = (node.get("extra") or {}).get("kinbase")
+    if not isinstance(metadata, dict):
+        return ""
+    mode = metadata["mode"]
+    label = "raw signed evidence; governance not evaluated" if mode == "raw" else "reduced snapshot"
+    note = f"Kinbase {label}; standing={node.get('standing', 'unruled')}"
+    if mode == "reduced":
+        receipt = metadata.get("reduction", {})
+        note += f"; as_of={receipt.get('as_of', 'unknown')}"
+        note += f"; projection={receipt.get('projection_state', 'unknown')}"
+        note += f"; source_trusted={receipt.get('trusted', False)}"
+    questions = list(node.get("kinbase_unknowns", []))
+    if node.get("type") == "question":
+        questions.insert(0, {**metadata, "question": node["content"]})
+    for question in questions:
+        owner = " / ".join(filter(None, (question.get("owner_role"), question.get("owner_identity")))) or "unresolved"
+        note += f"\nUnknown [{question.get('status', 'open')}]: {question['question']} (owner: {owner})"
+    return note

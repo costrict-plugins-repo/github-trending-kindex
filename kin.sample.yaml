@@ -1,0 +1,71 @@
+# Kindex configuration
+# Copy to kin.yaml, or place at ~/.config/kindex/kin.yaml
+# Or use: kin config set <key> <value>
+
+# Where your knowledge lives on disk
+data_dir: ~/.kindex
+
+# Directories to scan for projects (kin ingest projects)
+project_dirs:
+  - ~/src
+  - ~/notes
+
+# Claude Code data directory (for session scanning)
+claude_dir: ~/.claude
+
+# LLM integration (optional — improves extraction and search)
+llm:
+  enabled: false
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+  api_key_env: ANTHROPIC_API_KEY
+
+# Vector embeddings (optional -- improves semantic search)
+embedding:
+  provider: voyage
+  # model: ""                      # empty = provider default (voyage-context-4 for Voyage)
+  # api_key_env: ""                # empty = provider default (VOYAGE_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY)
+  # dimensions: 0                  # 0 = provider default (1024 / 1536 / 3072 / 384)
+  # strategy: ""                   # empty/auto; contextual only when the model supports it
+  # chunk_chars: 6000              # stable local chunks for contextual embedding models
+  # chunk_overlap_chars: 600
+  # max_group_chunks: 20
+  # reindex_max_jobs: 200          # cron drain cap for queued embedding work
+  # reindex_max_queue: 100000
+
+# Budget limits for LLM calls (USD)
+budget:
+  daily: 0.50
+  weekly: 2.00
+  monthly: 5.00
+
+# Default search/traversal behavior
+defaults:
+  hops: 2
+  min_weight: 0.1
+  mode: bfs
+
+# Sim supervisory check-in (optional). When sim.command runs an external
+# simulacrum, these env-var NAMES (never values) are checked, in order, for an
+# Anthropic key before launch. Default: [ANTHROPIC_API_KEY].
+# sim:
+#   api_key_env: [MY_ORG_ANTHROPIC_API_KEY, ANTHROPIC_API_KEY]
+
+# Code ingest (`kin ingest code`). Usually set per project in the repo's
+# .kin/config, which wins over this file for that repo; set here it applies to
+# any repo whose .kin/config has no code_ingest section.
+# code_ingest:
+#   unity: false                   # index Unity assets (.unity/.prefab/.asset/.mat/...) and .meta GUIDs
+#   include_extensions: {}         # extra extensions to index, e.g. {".shader": "Unity Shader"}
+#   exclude:                       # fnmatch globs, ADDED to the built-in excludes (tests/*, vendor/*, Library/*, ...)
+#     - "client/Assets/Licensed/*" # relative to the git repo root, whichever directory is ingested
+#     - "*.mat"                    # '*' crosses '/', so this matches at any depth
+# Files a new exclude covers are retired on the next full ingest.
+
+# Known-secret masking (optional, user config only). Values from these env
+# files are stored and shown as $NAME. Default keys: names containing KEY,
+# TOKEN, SECRET, PASSWORD, ... (see README "Masking Known Secrets").
+# secret_mask:
+#   files: [~/.profile]
+#   keys: [OPENAI_API_KEY, github, "AWS_*_KEY"]
+#   min_length: 8

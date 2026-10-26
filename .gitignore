@@ -1,0 +1,45 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/
+
+# Databases (user data, not shipped)
+*.db
+
+# User config (not shipped)
+conv.yaml
+kin.yaml
+
+# Working dirs
+.tmp/
+.conv/
+
+# OS
+.DS_Store
+
+# MCP registry tokens
+.mcpregistry_*
+.envrc
+.direnv/
+.harness/
+
+# Local signed corpus and private validation records; never publication inputs.
+/.kin/events/
+/.kin/manifests/
+/.kin/kinbase.toml
+/kinbase-compatibility.md
+/docs/reviews/2026-09-12-supervisor-repair.md
+/docs/reviews/supervisor-acceptance/
+
+# Agents
+/.claude
+/.codex
+
+# Factory run records and generated Pact run state: local working records with
+# absolute workstation paths; not needed to operate or to reproduce a result.
+/.factory/
+/.pact/state.json
+/.pact/test-gen/analysis.json
