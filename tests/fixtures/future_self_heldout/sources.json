@@ -1,0 +1,326 @@
+{
+  "fixture_version": 1,
+  "fictional": true,
+  "sources": [
+    {
+      "id": "s01",
+      "title": "Pottery studio kiln shutdown",
+      "content": "On 12 February 2026, Mira found that the studio kiln stopped near 800 degrees because the lid interlock connector had worked loose. Reseating the blue connector cleared the fault. The heating elements tested normally.",
+      "scope": "studio",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s02",
+      "title": "Ridge observatory tracking",
+      "content": "During the March open night, Tomas fixed the observatory telescope drifting east by switching the controller from southern to northern hemisphere mode. The alignment stars and tripod level were already correct.",
+      "scope": "observatory",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s03",
+      "title": "Clinic specimen freezer alarm",
+      "content": "The Birch clinic freezer alarm sounded each afternoon after deliveries. Hana found cartons blocking the rear air return. Moving the cartons restored temperature without replacing the thermostat.",
+      "scope": "clinic",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s04",
+      "title": "School trip transport",
+      "content": "For the Cedar school wetland trip on 18 May, Leena booked the smaller bus because the bridge by the reserve has a six-ton weight limit. Students meet at the east gate at 08:20.",
+      "scope": "school",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s05",
+      "title": "Workshop bicycle vibration",
+      "content": "Oren traced the cargo bicycle shudder under braking to a contaminated front rotor. He cleaned the rotor and replaced the pads; tightening the headset had not helped.",
+      "scope": "workshop",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s06",
+      "title": "Cooperative payroll pennies",
+      "content": "The Harbour cooperative payroll totals were off by a few cents because hours were rounded on each daily entry. Jules changed the export to round only the final weekly total per person.",
+      "scope": "cooperative",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s07",
+      "title": "Choir spring rehearsal venue",
+      "content": "Nadia moved the spring choir rehearsal to Lantern Hall because the usual room was being repainted. The hall caretaker is Pavel and the access key is collected from the bakery next door.",
+      "scope": "choir",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s08",
+      "title": "Greenhouse wilt investigation",
+      "content": "The north greenhouse tomato beds wilted despite wet soil. Dev found a blocked return drain causing waterlogged roots. Clearing the return restored drainage; adding more irrigation had made the problem worse.",
+      "scope": "garden",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s09",
+      "title": "Museum display fading",
+      "content": "Inez chose pigment printing for the maritime museum labels after the trial dye labels faded beside the south window. The wording and font size remained unchanged.",
+      "scope": "museum",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s10",
+      "title": "Island ferry luggage plan",
+      "content": "For the 6 June island survey, Amara reserved the first ferry and put sample cases on the wheeled cart. The passenger gangway has steps, so the cart must use the vehicle ramp with staff assistance.",
+      "scope": "survey",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s11",
+      "title": "Community pantry collection",
+      "content": "The Elm pantry now collects bread after 16:30 on Thursdays. Bakery manager Rowan requested the later pickup so unsold loaves are counted before donation.",
+      "scope": "pantry",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s12",
+      "title": "Blue glaze trial estimate",
+      "content": "At the first pottery planning meeting, Mira estimated that cobalt glaze batch B17 should be fired at cone 6. This estimate was recorded before the supplier certificate arrived.",
+      "scope": "studio",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s13",
+      "title": "Blue glaze supplier correction",
+      "content": "Correction to the earlier B17 estimate: the supplier certificate specifies cone 5, not cone 6. Mira confirmed that batch B17 should use cone 5. This replaces the first planning estimate.",
+      "scope": "studio",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": "s12"
+    },
+    {
+      "id": "s14",
+      "title": "Wetland grant attachment",
+      "content": "Rafi discovered the wetland restoration grant upload was rejected because the habitat map PDF exceeded the twelve-megabyte limit. Exporting the map at 150 dpi reduced it enough for submission.",
+      "scope": "conservation",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s15",
+      "title": "Archive scanner streaks",
+      "content": "At the town archive, Celia eliminated a vertical streak on scanned letters by cleaning the narrow feeder glass. The broad flatbed glass was clean and did not cause the streak.",
+      "scope": "archive",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s16",
+      "title": "Workshop heat pump noise",
+      "content": "The workshop heat pump rattled only during defrost. Beck found its condensate pipe tapping the metal wall bracket. A rubber spacer stopped the tapping without changing compressor settings.",
+      "scope": "workshop",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s17",
+      "title": "Library tablet sign-in",
+      "content": "Library loan tablets repeatedly returned to the sign-in screen after waking. Edda found the device clock was seventeen minutes slow. Synchronizing time stopped the session-token rejection.",
+      "scope": "library",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s18",
+      "title": "River sampling bottles",
+      "content": "Niko marked the upstream river samples with green caps and downstream samples with white caps for the April survey. Both sets used identical amber bottles and the same preservative.",
+      "scope": "survey",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s19",
+      "title": "Inn late arrival instructions",
+      "content": "For the orchard survey overnight stay, Suri arranged late entry to Juniper Inn through the courtyard door. The main lobby locks at 21:00; the courtyard bell reaches the night caretaker.",
+      "scope": "survey",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s20",
+      "title": "Seed swap draft room",
+      "content": "The first seed swap planning note reserved the Maple room for 22 March at 10:00. That booking was provisional pending the building inspection.",
+      "scope": "garden",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s21",
+      "title": "Seed swap confirmed room",
+      "content": "The confirmed seed swap on 22 March at 10:00 is in the Willow room. The Maple room failed its building inspection, so the provisional Maple booking is superseded.",
+      "scope": "garden",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": "s20"
+    },
+    {
+      "id": "s22",
+      "title": "Volunteer form duplicate submissions",
+      "content": "The volunteer signup form created two records when someone double-clicked Submit. Priya added a request idempotency key so retrying the same submission reuses the first record. A longer visual animation was rejected.",
+      "scope": "volunteers",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s23",
+      "title": "Photo backup verification",
+      "content": "After the field photography trip, Luka verified the backup by comparing SHA-256 checksums for every copied file. File counts alone had missed an earlier truncated image.",
+      "scope": "photography",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s24",
+      "title": "Community lunch sauce",
+      "content": "For the community lunch, Farah kept the sesame dressing in a separate labeled jug because two guests reported sesame allergy. The plain lentil dish contains no sesame.",
+      "scope": "kitchen",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s25",
+      "title": "Pottery studio kiln shutdown",
+      "content": "On 12 February 2026, Mira found that the studio kiln stopped near 800 degrees because the lid interlock connector had worked loose. Reseating the blue connector cleared the fault. The heating elements tested normally.",
+      "scope": "studio",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": "s01",
+      "supersedes": null
+    },
+    {
+      "id": "s26",
+      "title": "Field antenna packing",
+      "content": "For project Violet, the field antenna is packed in the orange tube. Morgan moved it from the grey case after the hinge cracked. The tube belongs to the radio survey kit.",
+      "scope": "violet",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s27",
+      "title": "Field antenna packing",
+      "content": "For project Amber, the field antenna is packed in the green crate. Morgan keeps the battery in the orange tube. These containers belong to the weather survey kit.",
+      "scope": "amber",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s28",
+      "title": "Telescope loan collection",
+      "content": "The school telescope loan is collected from the south entrance on Friday. Tomas asked the borrower to bring the padded bag. No tracking repair was discussed.",
+      "scope": "school",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s29",
+      "title": "Pharmacy door alarm",
+      "content": "At the Birch pharmacy, Hana adjusted the door alarm delay to allow delivery staff to wheel cartons inside. The medicine refrigerator passed its temperature inspection.",
+      "scope": "pharmacy",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s30",
+      "title": "Museum loading entrance",
+      "content": "The maritime museum delivery labels must show the north loading entrance. Inez confirmed that courier vans cannot stop at the south visitor entrance.",
+      "scope": "museum",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s31",
+      "title": "Pantry freezer purchase",
+      "content": "Rowan donated a chest freezer to the Elm pantry for frozen meals. The electrician will install a dedicated outlet before it is switched on.",
+      "scope": "pantry",
+      "audience": "team",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    },
+    {
+      "id": "s32",
+      "title": "Private music practice",
+      "content": "Nadia keeps her personal violin mute in the blue desk drawer at home. This private note is unrelated to the choir venue or shared hall access.",
+      "scope": "personal",
+      "audience": "private",
+      "type": "concept",
+      "duplicate_of": null,
+      "supersedes": null
+    }
+  ]
+}

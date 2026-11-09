@@ -1,0 +1,550 @@
+"""Independent H1-H5 acceptance tests; authored without product-source access.
+
+Oracle: health-contract.md H1-H5 plus Validator's shared public API/fixtures.
+Every assert below is governed by the citing test docstring or helper comment.
+The Validator, not the Tester, executes these tests.
+"""
+import datetime as dt
+from email import message_from_string
+from email.utils import getaddresses
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+
+class Boundary:
+    def __init__(self, root):
+        self.root = root
+        self.home = root / "home"
+        self.state = root / "health"
+        self.project = root / "project"
+        for path in (self.home, self.state, self.project):
+            path.mkdir()
+        self.now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        self.scope = {"project_path": str(self.project), "agent": "claude", "session_id": "independent-session"}
+        self.mail_log = root / "transport.jsonl"
+        self.fail = root / "transport-fails"
+        self.sendmail = root / "fake-sendmail"
+        self.sendmail.write_text(
+            "#!" + sys.executable + "\n"
+            "import json, pathlib, sys\n"
+            f"log = pathlib.Path({str(self.mail_log)!r})\n"
+            "with log.open('a') as out:\n"
+            " out.write(json.dumps({'argv':sys.argv[1:],'message':sys.stdin.read()})+'\\n')\n"
+            f"if pathlib.Path({str(self.fail)!r}).exists():\n"
+            " sys.stderr.write('synthetic transport failure\\n')\n"
+            " sys.exit(75)\n"
+        )
+        self.sendmail.chmod(0o700)
+        inherited_names = ("PATH", "PYTHONPATH", "PYTHONHOME", "TMPDIR", "SYSTEMROOT", "LANG", "LC_ALL", "TZ")
+        self.env = {name: os.environ[name] for name in inherited_names if name in os.environ}
+        self.env.update(HOME=str(self.home), KIN_HEALTH_DIR=str(self.state),
+                        CODEX_HOME=str(self.home / ".codex"),
+                        CLAUDE_CONFIG_DIR=str(self.home / ".claude"),
+                        XDG_DATA_HOME=str(self.home / ".local/share"),
+                        XDG_CONFIG_HOME=str(self.home / ".config"))
+        self.config = dict(enabled=True, mail_enabled=True, desktop_enabled=False, active_seconds=7200,
+                           hook_grace_seconds=300, use_grace_seconds=1800,
+                           queue_grace_seconds=900, failure_threshold=3,
+                           dismissed_threshold=3, consecutive_checks=2,
+                           cooldown_seconds=21600, sendmail_path=str(self.sendmail))
+        self.configure()
+
+    def iso(self, offset=0):
+        return (self.now + dt.timedelta(seconds=offset)).isoformat()
+
+    def configure(self, **changes):
+        self.config.update(changes)
+        (self.state / "config.json").write_text(json.dumps(self.config))
+
+    def record(self, kind, offset=0, scope=None, **details):
+        # Shared public record API. Each process is fresh (H1/H4 persistence).
+        payload = {"scope": scope or self.scope, "kind": kind,
+                   "details": {"at": self.iso(offset), **details}}
+        result = subprocess.run(
+            [sys.executable, "-c", "import json,sys; from kindex.supervisor_health import record; p=json.load(sys.stdin); record(p['scope'],p['kind'],p['details'])"],
+            input=json.dumps(payload), text=True, capture_output=True, env=self.env,
+        )
+        assert result.returncode == 0, result.stderr  # Public API success contract.
+
+    def command(self, command, notify=False, offset=0):
+        args = [sys.executable, "-m", "kindex.supervisor_health", command, "--json"]
+        if command == "check":
+            args += ["--now", self.iso(offset)]
+        if notify:
+            args += ["--notify"]
+        result = subprocess.run(args, text=True, capture_output=True, env=self.env)
+        assert result.returncode in (0, 1), result.stderr  # Shared CLI: JSON report, not invocation failure.
+        return json.loads(result.stdout)
+
+    def check(self, **kwargs):
+        return self.command("check", **kwargs)
+
+    def mail(self):
+        return [json.loads(line) for line in self.mail_log.read_text().splitlines()] if self.mail_log.exists() else []
+
+    def seed_active(self):
+        self.record("activity", -60, active=True, source="explicit")
+        self.record("hook", -50)
+        self.record("use", -40, tool="search", initiator="agent", outcome="success")
+
+    def failures(self):
+        self.seed_active()
+        for n in range(3):
+            self.record("review", -30 + n, state="failed")
+
+    def native_claude(self, age=400):
+        # Validator-supplied public Claude host fixture; no product internals.
+        path = self.home / ".claude/projects" / str(self.project).replace("/", "-") / "independent-session.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"type": "user", "uuid": "native-event-1",
+                                   "sessionId": self.scope["session_id"],
+                                   "cwd": str(self.project), "timestamp": self.iso(-age),
+                                   "message": {"role": "user", "content": "SYNTHETIC_PRIVATE_TRANSCRIPT_47"}}) + "\n")
+        stamp = (self.now - dt.timedelta(seconds=age)).timestamp()
+        os.utime(path, (stamp, stamp))
+        return path
+
+
+@pytest.fixture
+def b(tmp_path):
+    return Boundary(tmp_path)
+
+
+def issues(report, code):
+    return [issue for issue in report["issues"] if issue["code"] == code]
+
+
+def summaries(report):
+    value = report["sessions"]
+    return list(value.values()) if isinstance(value, dict) else value
+
+
+def session(report, session_id="independent-session"):
+    matches = [row for row in summaries(report)
+               if row.get("scope", row).get("session_id") == session_id]
+    assert len(matches) == 1  # H1: scoped evidence must survive and be independently reportable.
+    return matches[0]
+
+
+def test_disabled_default_cannot_send_mail(b):
+    """H5 defaults off; H4 root-mail control. Mutation: enable absent config."""
+    # Keep fake transport configured; omit only enabled, so no real mail is possible.
+    del b.config["enabled"]
+    b.configure()
+    b.failures()
+    b.check(notify=True)
+    result = b.check(notify=True)
+    assert result["enabled"] is False
+    assert b.mail() == []
+
+
+def test_evidence_survives_restart_and_stays_scoped(b):
+    """H1 persistence/scope, H2 value. Mutation: merge sessions or drop events."""
+    b.seed_active()
+    other = {**b.scope, "agent": "codex", "session_id": "other-session"}
+    b.record("review", scope=other, state="quiet")
+    result = b.command("status")
+    first, second = session(result), session(result, "other-session")
+    assert first["counts"]["hook"] == 1
+    assert first["counts"]["use"] == 1
+    assert first["last"]["hook"] is not None
+    assert dt.datetime.fromisoformat(first["last"]["hook"].replace("Z", "+00:00")) == b.now - dt.timedelta(seconds=50)
+    assert second["counts"].get("hook", 0) == 0
+    assert second["completed_reviews"] == 1
+    assert first["value"] == "unverified"
+
+
+def test_duplicate_event_id_is_not_counted_twice(b):
+    """Shared event_id dedup API; H1 evidence counts. Mutation: append replay."""
+    for _ in range(2):
+        b.record("hook", event_id="same-event")
+    assert session(b.command("status"))["counts"]["hook"] == 1
+
+
+@pytest.mark.parametrize("state", ["quiet", "reviewed_quiet"])
+def test_quiet_reviews_are_completed_and_not_failures(b, state):
+    """H2 valid quiet work. Mutation: classify quiet as failure/incomplete."""
+    b.seed_active()
+    for n in range(3):
+        b.record("review", -20 + n, state=state)
+    result = b.check()
+    assert not issues(result, "review_failures")
+    assert not issues(result, "undelivered_review")
+    assert session(result)["completed_reviews"] == 3
+    assert session(result)["value"] == "unverified"
+
+
+def test_delivery_and_self_rating_do_not_prove_value(b):
+    """H2 evidence honesty. Mutation: delivery or self-rating becomes useful."""
+    b.seed_active()
+    b.record("review", -20, state="completed", reason="advisory", usefulness=1, value="explicitly_useful")
+    b.record("delivery", -10, usefulness=1, value="explicitly_useful")
+    assert session(b.check())["value"] == "unverified"
+
+
+@pytest.mark.parametrize("verdict,expected", [("useful", "explicitly_useful"),
+                                             ("acted_on", "explicitly_acted_on"),
+                                             ("dismissed", "explicitly_dismissed")])
+def test_explicit_feedback_is_reported(b, verdict, expected):
+    """H2 explicit feedback. Mutation: ignore verdict or fabricate another."""
+    b.seed_active()
+    b.record("feedback", verdict=verdict)
+    assert session(b.check())["value"] == expected
+
+
+def test_idle_session_does_not_raise_missing_hook(b):
+    """H3 idle exemption. Mutation: stale timestamp alone triggers alarm."""
+    b.record("activity", -4000, active=False, source="explicit")
+    result = b.check()
+    assert not issues(result, "missing_hooks")
+    assert b.mail() == []
+
+
+def test_explicit_activity_is_not_native_proof_of_missed_hooks(b):
+    """H3 distinguish reported vs observed. Mutation: trust report as native."""
+    b.record("activity", -400, active=True, source="explicit")
+    result = b.check()
+    assert not issues(result, "missing_hooks")
+    assert session(result)["activity_evidence"] == "reported"
+
+
+def test_native_session_without_any_hook_is_discovered_independently(b):
+    """H3 central red-now target. Mutation: enumerate registry/hooks only."""
+    b.native_claude(age=400)
+    result = b.check()
+    found = issues(result, "missing_hooks")
+    assert found
+    assert found[0]["scope"] == b.scope
+    assert session(result)["activity_evidence"] == "native_observed"
+    assert "SYNTHETIC_PRIVATE_TRANSCRIPT_47" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("tail_session,scoped", [("independent-session", True), ("other-session", False)])
+def test_oversized_first_prompt_still_scopes_native_claude_session(b, tail_session, scoped):
+    """H3 observation. Mutation: scope Claude only from the 64 KiB head window."""
+    path = b.home / ".claude/projects" / str(b.project).replace("/", "-") / "independent-session.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    meta = [{"type": kind, "sessionId": b.scope["session_id"]}
+            for kind in ("custom-title", "agent-name", "mode", "permission-mode")]
+    pasted = {"type": "user", "uuid": "native-paste", "sessionId": b.scope["session_id"],
+              "cwd": str(b.project), "timestamp": b.iso(-500),
+              "message": {"role": "user", "content": "x" * 200_000}}
+    latest = {"type": "assistant", "uuid": "native-reply", "sessionId": tail_session,
+              "cwd": str(b.project), "timestamp": b.iso(-400),
+              "message": {"role": "assistant", "content": "SYNTHETIC_PRIVATE_TRANSCRIPT_47"}}
+    path.write_text("".join(json.dumps(row) + "\n" for row in (*meta, pasted, latest)))
+    result = b.check()
+    assert bool(issues(result, "observation_unavailable")) is not scoped
+    assert bool(issues(result, "missing_hooks")) is scoped
+    if scoped:
+        assert issues(result, "missing_hooks")[0]["scope"] == b.scope
+    assert "SYNTHETIC_PRIVATE_TRANSCRIPT_47" not in json.dumps(result)
+
+
+def test_native_hook_grace_suppresses_early_allegation(b):
+    """H3/H4 hook grace. Mutation: native activity immediately alarms."""
+    b.native_claude(age=30)
+    assert not issues(b.check(), "missing_hooks")
+
+
+def test_automatic_retrieval_does_not_mask_missing_agent_use(b):
+    """H1 automatic/agent distinction; H2 missing use. Mutation: count all use."""
+    b.record("activity", -2000, active=True, source="native")
+    b.record("hook", -1990)
+    b.record("use", -10, tool="context", initiator="automatic", outcome="success")
+    # Native work must advance beyond grace; idle wall time alone is insufficient.
+    b.record("activity", -2, active=True, source="native")
+    assert issues(b.check(), "missing_use")
+    b.record("use", -1, tool="search", initiator="agent", outcome="success")
+    result = b.check()
+    assert not issues(result, "missing_use")
+    assert session(result)["use_evidence"] == "observed"
+
+
+@pytest.mark.parametrize("call,counts", [
+    ({"name": "Bash", "input": {"command": "cd /tmp && kin add 'E2b result' --tags x"}}, True),
+    ({"name": "mcp__kindex-modern__memory", "input": {}}, True),
+    ({"name": "Bash", "input": {"command": "grep -rn 'kin add' src; ls -la"}}, False),
+])
+def test_native_cli_and_plugin_use_count_as_agent_use(b, call, counts):
+    """H2 missing use. Mutation: only MCP names from the kindex server count."""
+    b.record("activity", -2000, active=True, source="native")
+    b.record("hook", -1990)
+    path = b.home / ".claude/projects" / str(b.project).replace("/", "-") / "independent-session.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"type": "assistant", "uuid": "native-call-1",
+                                "sessionId": b.scope["session_id"], "cwd": str(b.project),
+                                "timestamp": b.iso(-2),
+                                "message": {"role": "assistant", "content": [
+                                    {"type": "tool_use", "id": "toolu_native_1", **call}]}}) + "\n")
+    result = b.check()
+    assert bool(issues(result, "missing_use")) is not counts
+    assert session(result)["use_evidence"] == ("observed" if counts else "not_observed")
+    assert "E2b result" not in json.dumps(result)
+
+
+def _claude_subagent(b, rows, name="agent-a1"):
+    # Claude Code layout: <projects>/<dir>/<parent>.jsonl and <dir>/<parent>/subagents/agent-<id>.jsonl.
+    folder = b.home / ".claude/projects" / str(b.project).replace("/", "-")
+    parent = folder / "independent-session.jsonl"
+    if not parent.exists():
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        parent.write_text(json.dumps({"type": "user", "uuid": "parent-old", "sessionId": b.scope["session_id"],
+                                      "cwd": str(b.project), "timestamp": b.iso(-5000),
+                                      "message": {"role": "user", "content": "SYNTHETIC_PRIVATE_TRANSCRIPT_47"}}) + "\n")
+    path = folder / "independent-session" / "subagents" / (name + ".jsonl")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A worktree-isolated subagent reports its worktree as cwd, not the parent's project.
+    path.write_text("".join(json.dumps({"isSidechain": True, "agentId": name[6:], "cwd": str(b.root / "worktree"),
+                                        **row}) + "\n" for row in rows))
+    (path.parent / (name + ".meta.json")).write_text(json.dumps({"agentType": "general-purpose"}))
+    return path
+
+
+def _assistant_call(b, uuid, offset, call, session_id="independent-session"):
+    return {"type": "assistant", "uuid": uuid, "sessionId": session_id, "timestamp": b.iso(offset),
+            "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_" + uuid, **call}]}}
+
+
+@pytest.mark.parametrize("call,sub_session,counts", [
+    ({"name": "mcp__kindex__search", "input": {"query": "E2b result"}}, "independent-session", True),
+    ({"name": "Bash", "input": {"command": "kin add 'E2b result'"}}, "independent-session", True),
+    ({"name": "Bash", "input": {"command": "ls -la"}}, "independent-session", False),
+    ({"name": "mcp__kindex__search", "input": {"query": "E2b result"}}, "other-session", False),
+])
+def test_subagent_kindex_use_counts_for_parent_session(b, call, sub_session, counts):
+    """H2 missing use. Mutation: scan top-level sessions only, or trust a subagent row's own session."""
+    b.record("activity", -2000, active=True, source="native")
+    b.record("hook", -1990)
+    folder = b.home / ".claude/projects" / str(b.project).replace("/", "-")
+    folder.mkdir(parents=True)
+    (folder / "independent-session.jsonl").write_text(json.dumps({"cwd": str(b.project), **_assistant_call(
+        b, "parent-1", -2, {"name": "Agent", "input": {"prompt": "SYNTHETIC_PRIVATE_TRANSCRIPT_47"}})}) + "\n")
+    _claude_subagent(b, [_assistant_call(b, "sub-1", -100, call, sub_session)])
+    b.check()
+    result = b.check()
+    assert bool(issues(result, "missing_use")) is not counts
+    parent = session(result)
+    assert parent["use_evidence"] == ("observed" if counts else "not_observed")
+    # Re-scans do not double count, and the subagent never gets a scope of its own.
+    assert parent["counts"]["use"] == (1 if counts else 0)
+    assert [row.get("scope", row)["session_id"] for row in summaries(result)] == ["independent-session"]
+    assert "E2b result" not in json.dumps(result)
+
+
+def test_subagent_work_is_not_parent_activity(b):
+    """H3 observed activity. Mutation: attribute subagent rows as parent activity."""
+    _claude_subagent(b, [
+        {"type": "user", "uuid": "sub-prompt", "sessionId": "independent-session", "timestamp": b.iso(-1100),
+         "message": {"role": "user", "content": "SYNTHETIC_PRIVATE_TRANSCRIPT_47"}},
+        _assistant_call(b, "sub-1", -600, {"name": "Bash", "input": {"command": "ls"}}),
+        _assistant_call(b, "sub-2", -2, {"name": "mcp__kindex__add", "input": {}}),
+    ])
+    result = b.check()
+    assert not issues(result, "missing_hooks") and not issues(result, "missing_use")
+    parent = session(result)
+    assert parent["active"] is False and parent["counts"]["activity"] == 0
+    assert parent["use_evidence"] == "observed"
+
+
+def test_subagent_files_have_their_own_bound(b):
+    """H3 bounded observation. Mutation: subagent files share the host-wide cap (one
+    busy session makes Claude unobservable) or the per-session cap reads them all."""
+    b.record("activity", -2000, active=True, source="native")
+    b.record("hook", -1990)
+    b.native_claude(age=30)
+    stamp = b.now.timestamp()
+    for n in range(40):
+        call = {"name": "mcp__kindex__search", "input": {}} if n in (0, 39) else {"name": "Bash", "input": {"command": "ls"}}
+        path = _claude_subagent(b, [_assistant_call(b, "sub-%d" % n, -10, call)], name="agent-a%d" % n)
+        os.utime(path, (stamp - 300 + n, stamp - 300 + n))  # agent-a39 newest, agent-a0 oldest
+    # Four more busy sessions: 16 + 4 * 14 subagent files is past the host-wide 64.
+    folder = b.home / ".claude/projects" / str(b.project).replace("/", "-")
+    for k in range(4):
+        sid = "busy-%d" % k
+        (folder / (sid + ".jsonl")).write_text(json.dumps({"cwd": str(b.project), **_assistant_call(
+            b, sid, -5000, {"name": "Agent", "input": {}}, sid)}) + "\n")
+        for n in range(14):
+            path = folder / sid / "subagents" / ("agent-b%d.jsonl" % n)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"isSidechain": True, **_assistant_call(
+                b, "%s-%d" % (sid, n), -10, {"name": "Bash", "input": {"command": "ls"}}, sid)}) + "\n")
+            os.utime(path, (stamp - 900, stamp - 900))
+    result = b.check()
+    assert not issues(result, "observation_unavailable")
+    # Only the newest subagent's Kindex call is read; agent-a0 is past the per-session bound.
+    assert session(result)["counts"]["use"] == 1
+
+
+def _register_reviewer(b):
+    payload = {"agent": "claude", "session_id": b.scope["session_id"], "project_path": b.scope["project_path"]}
+    result = subprocess.run(
+        [sys.executable, "-c", "import json,sys; from kindex.supervisor_health import register_reviewer_session as r; "
+                               "p=json.load(sys.stdin); r(p['agent'], p['session_id'], p['project_path'])"],
+        input=json.dumps(payload), text=True, capture_output=True, env=b.env)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("variant", ["renamed_parent", "no_sidechain_flag", "reviewer_parent"])
+def test_subagent_use_needs_a_matching_parent(b, variant):
+    """H1 scoped evidence. Mutation: drop the parent file-name check, the sidechain flag,
+    or the reviewer exclusion, and a subagent's use is credited anyway."""
+    b.record("activity", -2000, active=True, source="native")
+    b.record("hook", -1990)
+    folder = b.home / ".claude/projects" / str(b.project).replace("/", "-")
+    folder.mkdir(parents=True)
+    stem = "renamed" if variant == "renamed_parent" else "independent-session"
+    (folder / (stem + ".jsonl")).write_text(json.dumps({"cwd": str(b.project), **_assistant_call(
+        b, "parent-1", -2, {"name": "Agent", "input": {}})}) + "\n")
+    if variant == "reviewer_parent":
+        _register_reviewer(b)
+    path = folder / stem / "subagents" / "agent-a1.jsonl"
+    path.parent.mkdir(parents=True)
+    row = _assistant_call(b, "sub-1", -100, {"name": "mcp__kindex__search", "input": {}})
+    row["isSidechain"] = variant != "no_sidechain_flag"
+    path.write_text(json.dumps(row) + "\n")
+    result = b.check()
+    uses = [r["counts"]["use"] for r in summaries(result)
+            if r.get("scope", r)["session_id"] == "independent-session"]
+    assert sum(uses) == 0
+
+
+def test_queued_review_grace_then_delivery_resolves(b):
+    """H2 prolonged queues/H4 grace. Mutation: queue never ages or delivery ignored."""
+    b.seed_active()
+    b.record("review", state="queued")
+    assert not issues(b.check(offset=899), "undelivered_review")
+    assert issues(b.check(offset=901), "undelivered_review")
+    b.record("review", 902, state="completed", reason="advisory")
+    b.record("delivery", 903)
+    assert not issues(b.check(offset=904), "undelivered_review")
+
+
+def test_repeated_dismissal_threshold(b):
+    """H2 repeated dismissed advice. Mutation: threshold off or dismissal ignored."""
+    b.seed_active()
+    for n in range(2):
+        b.record("feedback", -20 + n, verdict="dismissed")
+    assert not issues(b.check(), "dismissed_advice")
+    b.record("feedback", -1, verdict="dismissed")
+    assert issues(b.check(), "dismissed_advice")
+
+
+def test_notification_streak_cooldown_restart_and_actionable_root_mail(b):
+    """H4 consecutive checks, persistent cooldown, root-only actionable mail.
+
+    Mutation: send on first check, forget cooldown on restart, change recipient,
+    omit scope/evidence/diagnostic, or treat transport request as non-persistent.
+    """
+    b.failures()
+    first = b.check(notify=True)
+    first_issue = issues(first, "review_failures")[0]
+    assert first_issue["consecutive_checks"] == 1
+    assert b.mail() == []
+    second = b.check(notify=True, offset=1)
+    issue = issues(second, "review_failures")[0]
+    assert issue["last_notified"] is not None
+    assert len(b.mail()) == 1
+    required = {"id", "code", "reason", "scope", "evidence", "diagnostic",
+                "consecutive_checks", "notification_due", "last_notified", "transport_error"}
+    assert required <= issue.keys()
+    assert {"checked_at", "enabled", "issues", "sessions", "coverage"} <= second.keys()
+    assert issue["scope"] == b.scope
+    assert issue["evidence"]
+    assert issue["reason"]
+    assert "kindex" in issue["diagnostic"]
+    mail = b.mail()[0]
+    envelope_root = "root" in mail["argv"]
+    headers = message_from_string(mail["message"])
+    header_recipients = getaddresses(headers.get_all("To", []) + headers.get_all("Cc", []) + headers.get_all("Bcc", []))
+    header_root = "-t" in mail["argv"] and [address for _, address in header_recipients] == ["root"]
+    assert envelope_root or header_root
+    assert not any("@" in arg for arg in mail["argv"])
+    # H4 constrains the readable mail content; MIME transport encoding may wrap it.
+    body = "\n".join(
+        part.get_payload(decode=True).decode(part.get_content_charset() or "utf-8")
+        for part in headers.walk() if part.get_content_type() == "text/plain"
+    )
+    assert b.scope["project_path"] in body
+    assert b.scope["session_id"] in body
+    assert b.scope["agent"] in body
+    assert issue["diagnostic"] in body
+    b.check(notify=True, offset=2)
+    assert len(b.mail()) == 1
+
+
+def test_transport_failure_is_visible_and_retryable(b):
+    """H4 accept-before-mark. Mutation: mark notified despite send failure."""
+    b.failures()
+    b.fail.touch()
+    b.check(notify=True)
+    failed = issues(b.check(notify=True, offset=1), "review_failures")[0]
+    assert failed["transport_error"]
+    assert failed["last_notified"] is None
+    assert len(b.mail()) == 1
+    b.fail.unlink()
+    recovered = issues(b.check(notify=True, offset=2), "review_failures")[0]
+    assert len(b.mail()) == 2
+    assert recovered["last_notified"] is not None
+    assert not recovered["transport_error"]
+
+
+def test_issue_cooldowns_are_independent(b):
+    """H4 per-issue cooldown. Mutation: one mail suppresses all issue codes."""
+    b.failures()
+    b.check(notify=True)
+    b.check(notify=True, offset=1)
+    assert len(b.mail()) == 1
+    for n in range(3):
+        b.record("feedback", 2 + n, verdict="dismissed")
+    b.check(notify=True, offset=5)
+    report = b.check(notify=True, offset=6)
+    assert len(b.mail()) == 2
+    assert issues(report, "dismissed_advice")[0]["last_notified"] is not None
+
+
+def test_sendmail_path_is_executed_without_shell_interpolation(b):
+    """H4 executable transport/no shell. Mutation: shell command string dispatch."""
+    literal_path = b.root / "fake sendmail; literal executable"
+    b.sendmail.rename(literal_path)
+    b.configure(sendmail_path=str(literal_path))
+    b.failures()
+    b.check(notify=True)
+    report = b.check(notify=True, offset=1)
+    assert len(b.mail()) == 1
+    assert issues(report, "review_failures")[0]["last_notified"] is not None
+
+
+def test_private_content_is_not_persisted_or_mailed(b):
+    """H1/H4 privacy reaches ingestion and mail, with actual failure evidence.
+
+    Mutation: persist raw detail dictionaries or interpolate untrusted metadata.
+    """
+    sentinel = "SYNTHETIC_PRIVATE_PROMPT_SECRET_938"
+    b.seed_active()
+    for n in range(3):
+        b.record("review", -20 + n, state="failed", prompt=sentinel,
+                 credentials=sentinel, api_key=sentinel, details={"token": sentinel})
+    b.check(notify=True)
+    result = b.check(notify=True, offset=1)
+    assert issues(result, "review_failures")
+    assert len(b.mail()) == 1
+    assert sentinel not in json.dumps(result)
+    assert sentinel not in b.mail()[0]["message"]
+    for path in b.state.rglob("*"):
+        if path.is_file():
+            assert sentinel.encode() not in path.read_bytes(), str(path)
+
+
+def test_check_does_not_rewrite_user_config(b):
+    """H5 config preservation. Mutation: replace user config with defaults."""
+    b.configure(user_extension={"untouched": [1, 2, 3]})
+    before = (b.state / "config.json").read_bytes()
+    b.failures()
+    b.check()
+    assert (b.state / "config.json").read_bytes() == before

@@ -1,0 +1,8 @@
+/local/
+/cache/
+/tmp/
+/private/
+*.db
+*.sqlite
+*.sqlite3
+local/

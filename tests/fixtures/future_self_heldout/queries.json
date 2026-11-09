@@ -1,0 +1,1212 @@
+{
+  "fixture_version": 1,
+  "source_facts_only_oracle": true,
+  "queries": [
+    {
+      "id": "q01_without_hints",
+      "pair_id": "q01",
+      "condition": "without_hints",
+      "query": "What fixed the pottery oven that kept cutting out partway through getting hot?",
+      "hint": "",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s01",
+        "s25"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q01_with_hints",
+      "pair_id": "q01",
+      "condition": "with_hints",
+      "query": "What fixed the pottery oven that kept cutting out partway through getting hot?",
+      "hint": "Mira looked at it in February.",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s01",
+        "s25"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q02_without_hints",
+      "pair_id": "q02",
+      "condition": "without_hints",
+      "query": "Why did the stars keep sliding out of view at the open evening?",
+      "hint": "",
+      "scope": "observatory",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s02"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q02_with_hints",
+      "pair_id": "q02",
+      "condition": "with_hints",
+      "query": "Why did the stars keep sliding out of view at the open evening?",
+      "hint": "Tomas was running the ridge observatory.",
+      "scope": "observatory",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s02"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q03_without_hints",
+      "pair_id": "q03",
+      "condition": "without_hints",
+      "query": "What was behind the daily afternoon cold-storage warning?",
+      "hint": "",
+      "scope": "clinic",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s03"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q03_with_hints",
+      "pair_id": "q03",
+      "condition": "with_hints",
+      "query": "What was behind the daily afternoon cold-storage warning?",
+      "hint": "Hana checked it after the clinic deliveries.",
+      "scope": "clinic",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s03"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q04_without_hints",
+      "pair_id": "q04",
+      "condition": "without_hints",
+      "query": "Why did we choose the less roomy vehicle for the children visiting the marsh?",
+      "hint": "",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s04"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q04_with_hints",
+      "pair_id": "q04",
+      "condition": "with_hints",
+      "query": "Why did we choose the less roomy vehicle for the children visiting the marsh?",
+      "hint": "Leena arranged the Cedar outing in May.",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s04"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q05_without_hints",
+      "pair_id": "q05",
+      "condition": "without_hints",
+      "query": "What actually stopped the front end shaking when the delivery bike slowed down?",
+      "hint": "",
+      "scope": "workshop",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s05"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q05_with_hints",
+      "pair_id": "q05",
+      "condition": "with_hints",
+      "query": "What actually stopped the front end shaking when the delivery bike slowed down?",
+      "hint": "Oren had already tried tightening the headset.",
+      "scope": "workshop",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s05"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q06_without_hints",
+      "pair_id": "q06",
+      "condition": "without_hints",
+      "query": "How did we get rid of the tiny differences in the staff payment export?",
+      "hint": "",
+      "scope": "cooperative",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s06"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q06_with_hints",
+      "pair_id": "q06",
+      "condition": "with_hints",
+      "query": "How did we get rid of the tiny differences in the staff payment export?",
+      "hint": "Jules was working on the Harbour weekly totals.",
+      "scope": "cooperative",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s06"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q07_without_hints",
+      "pair_id": "q07",
+      "condition": "without_hints",
+      "query": "Where do I pick up access for the replacement singing practice room?",
+      "hint": "",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s07"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q07_with_hints",
+      "pair_id": "q07",
+      "condition": "with_hints",
+      "query": "Where do I pick up access for the replacement singing practice room?",
+      "hint": "Nadia moved the spring choir rehearsal.",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s07"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q08_without_hints",
+      "pair_id": "q08",
+      "condition": "without_hints",
+      "query": "Why were the plants drooping even though their beds were soggy?",
+      "hint": "",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s08"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q08_with_hints",
+      "pair_id": "q08",
+      "condition": "with_hints",
+      "query": "Why were the plants drooping even though their beds were soggy?",
+      "hint": "Dev investigated the north greenhouse.",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s08"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q09_without_hints",
+      "pair_id": "q09",
+      "condition": "without_hints",
+      "query": "Which printing method did we settle on for the display cards near daylight?",
+      "hint": "",
+      "scope": "museum",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s09"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q09_with_hints",
+      "pair_id": "q09",
+      "condition": "with_hints",
+      "query": "Which printing method did we settle on for the display cards near daylight?",
+      "hint": "Inez was testing labels for the maritime museum.",
+      "scope": "museum",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s09"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q10_without_hints",
+      "pair_id": "q10",
+      "condition": "without_hints",
+      "query": "How were we supposed to get the wheeled sampling kit aboard the boat?",
+      "hint": "",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s10"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q10_with_hints",
+      "pair_id": "q10",
+      "condition": "with_hints",
+      "query": "How were we supposed to get the wheeled sampling kit aboard the boat?",
+      "hint": "Amara planned the June island trip.",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s10"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q11_without_hints",
+      "pair_id": "q11",
+      "condition": "without_hints",
+      "query": "When should I fetch the donated loaves, and why that time?",
+      "hint": "",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s11"
+      ],
+      "category": "person",
+      "answerable": true
+    },
+    {
+      "id": "q11_with_hints",
+      "pair_id": "q11",
+      "condition": "with_hints",
+      "query": "When should I fetch the donated loaves, and why that time?",
+      "hint": "Rowan manages the bakery serving Elm pantry.",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s11"
+      ],
+      "category": "person",
+      "answerable": true
+    },
+    {
+      "id": "q12_without_hints",
+      "pair_id": "q12",
+      "condition": "without_hints",
+      "query": "What is the corrected firing setting for that blue glaze batch?",
+      "hint": "",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s13"
+      ],
+      "category": "correction",
+      "answerable": true
+    },
+    {
+      "id": "q12_with_hints",
+      "pair_id": "q12",
+      "condition": "with_hints",
+      "query": "What is the corrected firing setting for that blue glaze batch?",
+      "hint": "Mira received the supplier certificate for B17.",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s13"
+      ],
+      "category": "correction",
+      "answerable": true
+    },
+    {
+      "id": "q13_without_hints",
+      "pair_id": "q13",
+      "condition": "without_hints",
+      "query": "How did we get the habitat diagram accepted by the funding portal?",
+      "hint": "",
+      "scope": "conservation",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s14"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q13_with_hints",
+      "pair_id": "q13",
+      "condition": "with_hints",
+      "query": "How did we get the habitat diagram accepted by the funding portal?",
+      "hint": "Rafi handled the wetland restoration application.",
+      "scope": "conservation",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s14"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q14_without_hints",
+      "pair_id": "q14",
+      "condition": "without_hints",
+      "query": "Which surface needed cleaning to stop the line through digitized correspondence?",
+      "hint": "",
+      "scope": "archive",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s15"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q14_with_hints",
+      "pair_id": "q14",
+      "condition": "with_hints",
+      "query": "Which surface needed cleaning to stop the line through digitized correspondence?",
+      "hint": "Celia was using the archive document feeder.",
+      "scope": "archive",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s15"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q15_without_hints",
+      "pair_id": "q15",
+      "condition": "without_hints",
+      "query": "What cured that banging sound whenever the heating unit thawed itself?",
+      "hint": "",
+      "scope": "workshop",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s16"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q15_with_hints",
+      "pair_id": "q15",
+      "condition": "with_hints",
+      "query": "What cured that banging sound whenever the heating unit thawed itself?",
+      "hint": "Beck checked the workshop heat pump.",
+      "scope": "workshop",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s16"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q16_without_hints",
+      "pair_id": "q16",
+      "condition": "without_hints",
+      "query": "Why did the borrowed devices keep asking patrons to log in again after sleep?",
+      "hint": "",
+      "scope": "library",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s17"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q16_with_hints",
+      "pair_id": "q16",
+      "condition": "with_hints",
+      "query": "Why did the borrowed devices keep asking patrons to log in again after sleep?",
+      "hint": "Edda found a timing problem on the library tablets.",
+      "scope": "library",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s17"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q17_without_hints",
+      "pair_id": "q17",
+      "condition": "without_hints",
+      "query": "How can I tell the water collected before the village from the water collected after it?",
+      "hint": "",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s18"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q17_with_hints",
+      "pair_id": "q17",
+      "condition": "with_hints",
+      "query": "How can I tell the water collected before the village from the water collected after it?",
+      "hint": "Niko assigned cap colors during the April river survey.",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s18"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q18_without_hints",
+      "pair_id": "q18",
+      "condition": "without_hints",
+      "query": "How do we get into our lodging after reception closes?",
+      "hint": "",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s19"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q18_with_hints",
+      "pair_id": "q18",
+      "condition": "with_hints",
+      "query": "How do we get into our lodging after reception closes?",
+      "hint": "Suri arranged Juniper for the orchard fieldwork.",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s19"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q19_without_hints",
+      "pair_id": "q19",
+      "condition": "without_hints",
+      "query": "Which room is the seed exchange actually using after the inspection?",
+      "hint": "",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s21"
+      ],
+      "category": "correction",
+      "answerable": true
+    },
+    {
+      "id": "q19_with_hints",
+      "pair_id": "q19",
+      "condition": "with_hints",
+      "query": "Which room is the seed exchange actually using after the inspection?",
+      "hint": "The event is at ten on 22 March.",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s21"
+      ],
+      "category": "correction",
+      "answerable": true
+    },
+    {
+      "id": "q20_without_hints",
+      "pair_id": "q20",
+      "condition": "without_hints",
+      "query": "What prevents a repeated click from registering the same helper twice?",
+      "hint": "",
+      "scope": "volunteers",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s22"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q20_with_hints",
+      "pair_id": "q20",
+      "condition": "with_hints",
+      "query": "What prevents a repeated click from registering the same helper twice?",
+      "hint": "Priya fixed the volunteer signup form.",
+      "scope": "volunteers",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s22"
+      ],
+      "category": "symptom",
+      "answerable": true
+    },
+    {
+      "id": "q21_without_hints",
+      "pair_id": "q21",
+      "condition": "without_hints",
+      "query": "How do we know the copied photographs are intact rather than merely present?",
+      "hint": "",
+      "scope": "photography",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s23"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q21_with_hints",
+      "pair_id": "q21",
+      "condition": "with_hints",
+      "query": "How do we know the copied photographs are intact rather than merely present?",
+      "hint": "Luka checked the files after the field trip.",
+      "scope": "photography",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s23"
+      ],
+      "category": "paraphrase",
+      "answerable": true
+    },
+    {
+      "id": "q22_without_hints",
+      "pair_id": "q22",
+      "condition": "without_hints",
+      "query": "Why was the lunch sauce served separately, and could everyone eat the plain dish?",
+      "hint": "",
+      "scope": "kitchen",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s24"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q22_with_hints",
+      "pair_id": "q22",
+      "condition": "with_hints",
+      "query": "Why was the lunch sauce served separately, and could everyone eat the plain dish?",
+      "hint": "Farah organized the community lentil lunch.",
+      "scope": "kitchen",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s24"
+      ],
+      "category": "context",
+      "answerable": true
+    },
+    {
+      "id": "q23_without_hints",
+      "pair_id": "q23",
+      "condition": "without_hints",
+      "query": "Where did Morgan put the antenna after its old container broke?",
+      "hint": "",
+      "scope": "violet",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s26"
+      ],
+      "category": "scope",
+      "answerable": true
+    },
+    {
+      "id": "q23_with_hints",
+      "pair_id": "q23",
+      "condition": "with_hints",
+      "query": "Where did Morgan put the antenna after its old container broke?",
+      "hint": "I am packing the Violet radio survey kit.",
+      "scope": "violet",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s26"
+      ],
+      "category": "scope",
+      "answerable": true
+    },
+    {
+      "id": "q24_without_hints",
+      "pair_id": "q24",
+      "condition": "without_hints",
+      "query": "Where is the antenna for my field kit?",
+      "hint": "",
+      "scope": "amber",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s27"
+      ],
+      "category": "scope",
+      "answerable": true
+    },
+    {
+      "id": "q24_with_hints",
+      "pair_id": "q24",
+      "condition": "with_hints",
+      "query": "Where is the antenna for my field kit?",
+      "hint": "I am working on project Amber with Morgan.",
+      "scope": "amber",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s27"
+      ],
+      "category": "scope",
+      "answerable": true
+    },
+    {
+      "id": "q25_without_hints",
+      "pair_id": "q25",
+      "condition": "without_hints",
+      "query": "Where should the driver take the museum shipment?",
+      "hint": "",
+      "scope": "museum",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s30"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q25_with_hints",
+      "pair_id": "q25",
+      "condition": "with_hints",
+      "query": "Where should the driver take the museum shipment?",
+      "hint": "Inez clarified the entrance for courier vans.",
+      "scope": "museum",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s30"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q26_without_hints",
+      "pair_id": "q26",
+      "condition": "without_hints",
+      "query": "What has to happen before the donated frozen-food storage can be used?",
+      "hint": "",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s31"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q26_with_hints",
+      "pair_id": "q26",
+      "condition": "with_hints",
+      "query": "What has to happen before the donated frozen-food storage can be used?",
+      "hint": "Rowan gave Elm pantry the chest freezer.",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s31"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q27_without_hints",
+      "pair_id": "q27",
+      "condition": "without_hints",
+      "query": "What was the original proposed room for the seed swap before the building inspection?",
+      "hint": "",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s20"
+      ],
+      "category": "historical",
+      "answerable": true
+    },
+    {
+      "id": "q27_with_hints",
+      "pair_id": "q27",
+      "condition": "with_hints",
+      "query": "What was the original proposed room for the seed swap before the building inspection?",
+      "hint": "The first planning note was for 22 March.",
+      "scope": "garden",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s20"
+      ],
+      "category": "historical",
+      "answerable": true
+    },
+    {
+      "id": "q28_without_hints",
+      "pair_id": "q28",
+      "condition": "without_hints",
+      "query": "What firing setting had Mira first estimated before the supplier corrected it?",
+      "hint": "",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s12"
+      ],
+      "category": "historical",
+      "answerable": true
+    },
+    {
+      "id": "q28_with_hints",
+      "pair_id": "q28",
+      "condition": "with_hints",
+      "query": "What firing setting had Mira first estimated before the supplier corrected it?",
+      "hint": "This is the older B17 planning note.",
+      "scope": "studio",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s12"
+      ],
+      "category": "historical",
+      "answerable": true
+    },
+    {
+      "id": "q29_without_hints",
+      "pair_id": "q29",
+      "condition": "without_hints",
+      "query": "What is the numeric keypad code for getting into the rehearsal hall?",
+      "hint": "",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q29_with_hints",
+      "pair_id": "q29",
+      "condition": "with_hints",
+      "query": "What is the numeric keypad code for getting into the rehearsal hall?",
+      "hint": "Nadia arranged the spring choir room.",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q30_without_hints",
+      "pair_id": "q30",
+      "condition": "without_hints",
+      "query": "Who manufactures the freezer at the clinic?",
+      "hint": "",
+      "scope": "clinic",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q30_with_hints",
+      "pair_id": "q30",
+      "condition": "with_hints",
+      "query": "Who manufactures the freezer at the clinic?",
+      "hint": "Hana investigated its afternoon alarm.",
+      "scope": "clinic",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q31_without_hints",
+      "pair_id": "q31",
+      "condition": "without_hints",
+      "query": "What did the ferry tickets cost per person?",
+      "hint": "",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q31_with_hints",
+      "pair_id": "q31",
+      "condition": "with_hints",
+      "query": "What did the ferry tickets cost per person?",
+      "hint": "Amara booked the first sailing for the June island survey.",
+      "scope": "survey",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q32_without_hints",
+      "pair_id": "q32",
+      "condition": "without_hints",
+      "query": "What exact date will the pantry electrician finish installing the outlet?",
+      "hint": "",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q32_with_hints",
+      "pair_id": "q32",
+      "condition": "with_hints",
+      "query": "What exact date will the pantry electrician finish installing the outlet?",
+      "hint": "Rowan donated the chest freezer.",
+      "scope": "pantry",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q33_without_hints",
+      "pair_id": "q33",
+      "condition": "without_hints",
+      "query": "Where does Nadia keep her personal violin accessory?",
+      "hint": "",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "scope_no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q33_with_hints",
+      "pair_id": "q33",
+      "condition": "with_hints",
+      "query": "Where does Nadia keep her personal violin accessory?",
+      "hint": "I only have access to the shared choir notes.",
+      "scope": "choir",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [],
+      "category": "scope_no_answer",
+      "answerable": false
+    },
+    {
+      "id": "q34_without_hints",
+      "pair_id": "q34",
+      "condition": "without_hints",
+      "query": "What time and entrance were chosen for assembling the school outing?",
+      "hint": "",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s04"
+      ],
+      "category": "time",
+      "answerable": true
+    },
+    {
+      "id": "q34_with_hints",
+      "pair_id": "q34",
+      "condition": "with_hints",
+      "query": "What time and entrance were chosen for assembling the school outing?",
+      "hint": "Leena booked transport to the wetland reserve.",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s04"
+      ],
+      "category": "time",
+      "answerable": true
+    },
+    {
+      "id": "q35_without_hints",
+      "pair_id": "q35",
+      "condition": "without_hints",
+      "query": "Why did Hana change the delivery entrance warning delay?",
+      "hint": "",
+      "scope": "pharmacy",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s29"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q35_with_hints",
+      "pair_id": "q35",
+      "condition": "with_hints",
+      "query": "Why did Hana change the delivery entrance warning delay?",
+      "hint": "This was the Birch pharmacy visit.",
+      "scope": "pharmacy",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s29"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q36_without_hints",
+      "pair_id": "q36",
+      "condition": "without_hints",
+      "query": "Where and when should the borrower collect the telescope?",
+      "hint": "",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s28"
+      ],
+      "category": "distractor",
+      "answerable": true
+    },
+    {
+      "id": "q36_with_hints",
+      "pair_id": "q36",
+      "condition": "with_hints",
+      "query": "Where and when should the borrower collect the telescope?",
+      "hint": "Tomas arranged the school loan.",
+      "scope": "school",
+      "allowed_audiences": [
+        "team",
+        "public"
+      ],
+      "expected_relevant_source_ids": [
+        "s28"
+      ],
+      "category": "distractor",
+      "answerable": true
+    }
+  ]
+}
